@@ -5,6 +5,8 @@ import math
 import mediapipe as mp
 import numpy as np
 
+from confidence_scoring import ConfidenceScorer, FrameObservation, print_confidence_report
+
 
 def _rotation_matrix_to_euler_angles(R):
     """
@@ -150,7 +152,8 @@ def analyse_gaze_from_video(
     output_video_path=None,
     yaw_threshold=15,
     pitch_threshold=15,
-    min_segment_duration=0.3
+    min_segment_duration=0.3,
+    enable_confidence_scoring=True
 ):
     """
     Analyse whether the person is roughly looking at the camera.
@@ -190,6 +193,7 @@ def analyse_gaze_from_video(
     frame_idx = 0
     looking_frames = []
     segments = []
+    confidence_scorer = ConfidenceScorer() if enable_confidence_scoring else None
 
     current_segment_start = None
 
@@ -212,8 +216,10 @@ def analyse_gaze_from_video(
             is_looking = False
             label = "No face"
             pitch = yaw = roll = None
+            face_detected = False
 
             if results.multi_face_landmarks:
+                face_detected = True
                 face_landmarks = results.multi_face_landmarks[0]
                 pose = _get_head_pose(frame, face_landmarks)
 
@@ -255,6 +261,12 @@ def analyse_gaze_from_video(
                         segments.append((current_segment_start, segment_end))
                     current_segment_start = None
 
+            if confidence_scorer is not None:
+                confidence_scorer.update(FrameObservation(
+                    face_detected=face_detected,
+                    looking_at_camera=is_looking
+                ))
+
             # Draw label
             cv2.putText(frame, label, (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0) if is_looking else (0, 0, 255), 2)
@@ -268,6 +280,12 @@ def analyse_gaze_from_video(
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 cv2.putText(frame, f"Pitch offset: {_angle_distance_from_front(pitch):.1f}", (20, 170),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+            if confidence_scorer is not None:
+                cv2.putText(frame, f"Confidence: {confidence_scorer.overall_score:.1f}/100", (20, 200),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(frame, confidence_scorer.label, (20, 230),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
             if writer is not None:
                 writer.write(frame)
@@ -297,7 +315,12 @@ def analyse_gaze_from_video(
     print(f"\nTotal looking-at-camera time: {looking_total_time:.2f} seconds")
     print(f"Video total duration: {total_duration:.2f} seconds")
 
-    return segments, looking_total_time
+    confidence_report = None
+    if confidence_scorer is not None:
+        confidence_report = confidence_scorer.report()
+        print_confidence_report(confidence_report)
+
+    return segments, looking_total_time, confidence_report
 
 
 def analyse_gaze_from_camera(
@@ -305,7 +328,8 @@ def analyse_gaze_from_camera(
     yaw_threshold=15,
     pitch_threshold=15,
     use_eye_gaze=True,
-    eye_yaw_weight=90
+    eye_yaw_weight=90,
+    enable_confidence_scoring=True
 ):
     """
     Analyse gaze/head direction from a webcam stream.
@@ -316,6 +340,8 @@ def analyse_gaze_from_camera(
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         raise ValueError(f"Cannot open camera: {camera_index}")
+
+    confidence_scorer = ConfidenceScorer() if enable_confidence_scoring else None
 
     with mp_face_mesh.FaceMesh(
         static_image_mode=False,
@@ -338,8 +364,10 @@ def analyse_gaze_from_camera(
             pitch = yaw = roll = None
             eye_gaze_offset = None
             compensated_yaw_offset = None
+            face_detected = False
 
             if results.multi_face_landmarks:
+                face_detected = True
                 face_landmarks = results.multi_face_landmarks[0]
                 pose = _get_head_pose(frame, face_landmarks)
 
@@ -382,6 +410,12 @@ def analyse_gaze_from_camera(
             cv2.putText(frame, label, (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0) if is_looking else (0, 0, 255), 2)
 
+            if confidence_scorer is not None:
+                confidence_scorer.update(FrameObservation(
+                    face_detected=face_detected,
+                    looking_at_camera=is_looking
+                ))
+
             if pitch is not None and yaw is not None and roll is not None:
                 cv2.putText(frame, f"Pitch: {pitch:.1f}", (20, 80),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -398,6 +432,12 @@ def analyse_gaze_from_camera(
                 cv2.putText(frame, f"Comp yaw: {compensated_yaw_offset:.1f}", (20, 230),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
+            if confidence_scorer is not None:
+                cv2.putText(frame, f"Confidence: {confidence_scorer.overall_score:.1f}/100", (20, 260),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(frame, confidence_scorer.label, (20, 290),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
             cv2.imshow("Camera Gaze Analysis", frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -405,3 +445,10 @@ def analyse_gaze_from_camera(
 
     cap.release()
     cv2.destroyAllWindows()
+
+    confidence_report = None
+    if confidence_scorer is not None:
+        confidence_report = confidence_scorer.report()
+        print_confidence_report(confidence_report)
+
+    return confidence_report

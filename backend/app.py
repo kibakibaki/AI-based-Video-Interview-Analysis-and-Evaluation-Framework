@@ -14,12 +14,13 @@ annotated_video = "../data/output/gaze_result.mp4"
 # detect_faces(frames_folder, faces_folder)
 
 # Step 3: Analyse gaze / head direction from video
-# segments, total_time = analyse_gaze_from_video(
+# segments, total_time, confidence_report = analyse_gaze_from_video(
 #     video_path=video_path,
 #     output_video_path=annotated_video,
 #     yaw_threshold=25,
 #     pitch_threshold=20,
-#     min_segment_duration=0.3
+#     min_segment_duration=0.3,
+#     enable_confidence_scoring=True
 # )
 
 # Temporary: analyse gaze / head direction from camera
@@ -28,7 +29,8 @@ analyse_gaze_from_camera(
     yaw_threshold=25,
     pitch_threshold=20,
     use_eye_gaze=True,
-    eye_yaw_weight=90
+    eye_yaw_weight=90,
+    enable_confidence_scoring=True
 )
 
 print("Done.")
