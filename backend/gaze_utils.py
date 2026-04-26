@@ -25,6 +25,68 @@ def _rotation_matrix_to_euler_angles(R):
     return np.degrees([x, y, z])
 
 
+def _angle_distance_from_front(angle):
+    """
+    Return the smallest distance from a front-facing angle.
+    solvePnP can represent a front-facing head as either 0 or +/-180 degrees.
+    """
+    return min(abs(angle), abs(abs(angle) - 180))
+
+
+def _landmark_xy(face_landmarks, idx):
+    lm = face_landmarks.landmark[idx]
+    return np.array([lm.x, lm.y], dtype="double")
+
+
+def _iris_center(face_landmarks, iris_ids):
+    points = [_landmark_xy(face_landmarks, idx) for idx in iris_ids]
+    return np.mean(points, axis=0)
+
+
+def _eye_horizontal_offset(face_landmarks, corner_a, corner_b, iris_ids):
+    corner_points = [_landmark_xy(face_landmarks, corner_a), _landmark_xy(face_landmarks, corner_b)]
+    left_corner = min(corner_points, key=lambda point: point[0])
+    right_corner = max(corner_points, key=lambda point: point[0])
+
+    eye_width = right_corner[0] - left_corner[0]
+    if eye_width <= 0:
+        return 0.0
+
+    iris = _iris_center(face_landmarks, iris_ids)
+    eye_mid_x = (left_corner[0] + right_corner[0]) / 2
+
+    return (iris[0] - eye_mid_x) / eye_width
+
+
+def _get_eye_gaze_offset(face_landmarks):
+    """
+    Estimate horizontal iris offset inside both eyes.
+    Negative/positive direction depends on camera mirroring, so the caller uses magnitude.
+    """
+    left_eye_offset = _eye_horizontal_offset(face_landmarks, 33, 133, range(468, 473))
+    right_eye_offset = _eye_horizontal_offset(face_landmarks, 362, 263, range(473, 478))
+    return (left_eye_offset + right_eye_offset) / 2
+
+
+def _is_looking_at_camera(
+    pitch,
+    yaw,
+    yaw_threshold,
+    pitch_threshold,
+    eye_gaze_offset=None,
+    eye_yaw_weight=90
+):
+    pitch_offset = _angle_distance_from_front(pitch)
+    yaw_offset = abs(yaw)
+    compensated_yaw_offset = yaw_offset
+
+    if eye_gaze_offset is not None:
+        eye_compensation = abs(eye_gaze_offset) * eye_yaw_weight
+        compensated_yaw_offset = max(0, yaw_offset - eye_compensation)
+
+    return compensated_yaw_offset <= yaw_threshold and pitch_offset <= pitch_threshold
+
+
 def _get_head_pose(frame, face_landmarks):
     """
     Estimate head pose using selected face landmarks and solvePnP.
@@ -158,8 +220,8 @@ def analyse_gaze_from_video(
                 if pose is not None:
                     pitch, yaw, roll, rvec, tvec, camera_matrix, dist_coeffs = pose
 
-                    # Rough rule: facing camera if yaw/pitch are both small
-                    if abs(yaw) <= yaw_threshold and abs(pitch) <= pitch_threshold:
+                    # Rough rule: facing camera if yaw/pitch offsets are both small
+                    if _is_looking_at_camera(pitch, yaw, yaw_threshold, pitch_threshold):
                         is_looking = True
                         label = "Looking at camera"
                     else:
@@ -204,6 +266,8 @@ def analyse_gaze_from_video(
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 cv2.putText(frame, f"Roll: {roll:.1f}", (20, 140),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, f"Pitch offset: {_angle_distance_from_front(pitch):.1f}", (20, 170),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             if writer is not None:
                 writer.write(frame)
@@ -239,7 +303,9 @@ def analyse_gaze_from_video(
 def analyse_gaze_from_camera(
     camera_index=0,
     yaw_threshold=15,
-    pitch_threshold=15
+    pitch_threshold=15,
+    use_eye_gaze=True,
+    eye_yaw_weight=90
 ):
     """
     Analyse gaze/head direction from a webcam stream.
@@ -270,6 +336,8 @@ def analyse_gaze_from_camera(
             is_looking = False
             label = "No face"
             pitch = yaw = roll = None
+            eye_gaze_offset = None
+            compensated_yaw_offset = None
 
             if results.multi_face_landmarks:
                 face_landmarks = results.multi_face_landmarks[0]
@@ -277,8 +345,21 @@ def analyse_gaze_from_camera(
 
                 if pose is not None:
                     pitch, yaw, roll, rvec, tvec, camera_matrix, dist_coeffs = pose
+                    if use_eye_gaze:
+                        eye_gaze_offset = _get_eye_gaze_offset(face_landmarks)
+                        compensated_yaw_offset = max(
+                            0,
+                            abs(yaw) - abs(eye_gaze_offset) * eye_yaw_weight
+                        )
 
-                    if abs(yaw) <= yaw_threshold and abs(pitch) <= pitch_threshold:
+                    if _is_looking_at_camera(
+                        pitch,
+                        yaw,
+                        yaw_threshold,
+                        pitch_threshold,
+                        eye_gaze_offset=eye_gaze_offset,
+                        eye_yaw_weight=eye_yaw_weight
+                    ):
                         is_looking = True
                         label = "Looking at camera"
                     else:
@@ -307,6 +388,14 @@ def analyse_gaze_from_camera(
                 cv2.putText(frame, f"Yaw: {yaw:.1f}", (20, 110),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 cv2.putText(frame, f"Roll: {roll:.1f}", (20, 140),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, f"Pitch offset: {_angle_distance_from_front(pitch):.1f}", (20, 170),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+            if eye_gaze_offset is not None and compensated_yaw_offset is not None:
+                cv2.putText(frame, f"Eye offset: {eye_gaze_offset:.2f}", (20, 200),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, f"Comp yaw: {compensated_yaw_offset:.1f}", (20, 230),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             cv2.imshow("Camera Gaze Analysis", frame)

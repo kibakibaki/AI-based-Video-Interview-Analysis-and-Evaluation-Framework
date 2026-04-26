@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Video Interview Evaluation</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="panel">
+        <div class="panel-header">
+          <p class="eyebrow">Submission</p>
+          <h1>AI Video Interview Evaluation</h1>
+        </div>
+
+        <section class="instructions" aria-labelledby="instructions-title">
+          <h2 id="instructions-title">Submission Instructions</h2>
+          <ul>
+            <li>Upload one interview video.</li>
+            <li>Accepted formats: MP4 or MOV.</li>
+            <li>Maximum duration: 5 minutes.</li>
+            <li>The file will be validated before analysis.</li>
+          </ul>
+        </section>
+
+        <form id="upload-form" class="upload-form">
+          <label class="file-picker" for="video-input">
+            <span class="file-picker-title">Choose interview video</span>
+            <span id="selected-file" class="file-picker-meta">No file selected</span>
+          </label>
+          <input id="video-input" name="video" type="file" accept="video/mp4,video/quicktime">
+
+          <button id="upload-button" type="submit">Upload Video</button>
+        </form>
+
+        <section id="status" class="status" aria-live="polite">
+          <p class="status-title">Status</p>
+          <p id="status-message">Waiting for a video upload.</p>
+          <dl id="result-details" class="result-details" hidden></dl>
+        </section>
+      </section>
+    </main>
+
+    <script src="/script.js"></script>
+  </body>
+</html>

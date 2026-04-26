@@ -26,7 +26,9 @@ annotated_video = "../data/output/gaze_result.mp4"
 analyse_gaze_from_camera(
     camera_index=0,
     yaw_threshold=25,
-    pitch_threshold=20
+    pitch_threshold=20,
+    use_eye_gaze=True,
+    eye_yaw_weight=90
 )
 
 print("Done.")
