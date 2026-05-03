@@ -130,23 +130,10 @@ form.addEventListener("submit", async (event) => {
       return;
     }
 
-    const features = analyseResult.analysis.confidence_report.features;
     setStatus("success", "Processing completed.", {
-      File: analyseResult.filename,
-      Duration: analyseResult.analysis.duration_label,
-      Saved: uploadResult.path,
       "Processing time": getProcessingElapsedLabel(),
-      "Eye contact score": `${analyseResult.analysis.confidence_report.overall_score}/100`,
-      "Confidence label": analyseResult.analysis.confidence_report.label,
-      "Looking time": `${analyseResult.analysis.looking_total_time}s`,
-      "Looking segments": analyseResult.analysis.segments.length,
-      "Gaze center ratio": features.gaze_center_ratio,
-      "Looking away time": `${features.looking_away_total_time}s`,
-      "Longest away": `${features.longest_looking_away_duration}s`,
-      "Blink rate": `${features.blink_rate_per_minute}/min`,
-      "Head stability": features.head_movement_stability_score,
-      "Annotated video": analyseResult.analysis.annotated_video,
-      "Next step": analyseResult.next_step,
+      "Video duration": analyseResult.analysis.duration_label,
+      "Confidence level": analyseResult.analysis.confidence_report.label,
     });
     window.alert("Processing completed.");
   } catch (error) {

@@ -89,8 +89,8 @@ frontend/
   script.js               Upload request and result display
   style.css               Page styling
 data/
-  video_sample/           Uploaded or sample videos
-  output/                 Annotated analysis videos
+  video_sample/           Uploaded videos named sample1, sample2, sample3, ...
+  output/                 CSV analysis results
 ```
 
 ## Notes
