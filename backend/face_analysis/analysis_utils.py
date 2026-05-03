@@ -11,6 +11,7 @@ from .head_pose_utils import (
     estimate_head_pose,
     is_head_facing_camera,
 )
+from .visual_features import VisualFeatureTracker
 
 
 def _is_looking_at_camera(
@@ -36,6 +37,7 @@ def analyse_gaze(
     pitch_threshold=15,
     min_segment_duration=0.3,
     use_eye_gaze=True,
+    analysis_frame_stride=1,
     show_preview=None,
     enable_confidence_scoring=True
 ):
@@ -52,6 +54,7 @@ def analyse_gaze(
         pitch_threshold: abs(pitch) <= threshold => looking at camera
         min_segment_duration: minimum duration (seconds) to keep
         use_eye_gaze: combine GazeTracking pupil direction with head pose
+        analysis_frame_stride: analyse one frame every N frames
         show_preview: whether to show OpenCV preview window
 
     Returns:
@@ -64,6 +67,8 @@ def analyse_gaze(
 
     if show_preview is None:
         show_preview = source_type == "camera"
+    if analysis_frame_stride < 1:
+        raise ValueError("analysis_frame_stride must be >= 1")
 
     if source_type == "video":
         if video_path is None:
@@ -100,6 +105,7 @@ def analyse_gaze(
     segments = []
     confidence_scorer = ConfidenceScorer() if enable_confidence_scoring else None
     pupil_gaze_tracker = PupilGazeTracker() if use_eye_gaze else None
+    visual_feature_tracker = VisualFeatureTracker()
 
     current_segment_start = None
 
@@ -115,6 +121,12 @@ def analyse_gaze(
             ret, frame = cap.read()
             if not ret:
                 break
+
+            if frame_idx % analysis_frame_stride != 0:
+                if writer is not None:
+                    writer.write(frame)
+                frame_idx += 1
+                continue
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = face_mesh.process(rgb)
@@ -167,6 +179,15 @@ def analyse_gaze(
                     face_detected=face_detected,
                     looking_at_camera=is_looking
                 ))
+            visual_feature_tracker.update(
+                current_time=current_time,
+                face_detected=face_detected,
+                looking_at_camera=is_looking,
+                pitch=pitch,
+                yaw=yaw,
+                roll=roll,
+                gaze_observation=gaze_observation,
+            )
 
             # Draw label
             cv2.putText(frame, label, (20, 40),
@@ -211,6 +232,14 @@ def analyse_gaze(
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
+            analysed_frames = (frame_idx // analysis_frame_stride) + 1
+            if analysed_frames % 100 == 0:
+                print(
+                    f"Analysed {analysed_frames} sampled frames "
+                    f"({current_time:.1f}s)...",
+                    flush=True,
+                )
+
             frame_idx += 1
 
     total_duration = frame_idx / fps
@@ -225,6 +254,7 @@ def analyse_gaze(
         cv2.destroyAllWindows()
 
     looking_total_time = sum(end - start for start, end in segments)
+    visual_features = visual_feature_tracker.finish(total_duration)
 
     print("\n Looking at camera time segments ")
     if not segments:
@@ -239,6 +269,7 @@ def analyse_gaze(
     confidence_report = None
     if confidence_scorer is not None:
         confidence_report = confidence_scorer.report()
+        confidence_report["features"] = visual_features
         print_confidence_report(confidence_report)
 
     return segments, looking_total_time, confidence_report

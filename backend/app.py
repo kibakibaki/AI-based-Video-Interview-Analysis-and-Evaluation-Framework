@@ -20,11 +20,11 @@ MAX_DURATION_SECONDS = 5 * 60
 
 # Change this variable to choose what happens when running this file directly.
 # "server" starts the upload website; "analysis" runs the local gaze analysis.
-APP_MODE = "analysis" #"server"
+APP_MODE = "server" #"analysis"
 
 # Change this variable to switch local analysis input.
 # Valid values: "camera" or "video".
-ANALYSIS_SOURCE = "camera" #"video" 
+ANALYSIS_SOURCE = "video" #"camera"
 
 LOCAL_VIDEO_PATH = UPLOAD_DIR / "sample1.mp4"
 LOCAL_OUTPUT_VIDEO_PATH = OUTPUT_DIR / "gaze_result.mp4"
@@ -65,6 +65,31 @@ def _serialise_segments(segments):
     ]
 
 
+def _build_analysis_response(filename, saved_path, duration):
+    output_video_path = OUTPUT_DIR / f"{Path(filename).stem}-gaze.mp4"
+    segments, looking_total_time, confidence_report = analyse_gaze(
+        source_type="video",
+        video_path=str(saved_path),
+        output_video_path=str(output_video_path),
+        yaw_threshold=25,
+        pitch_threshold=20,
+        min_segment_duration=0.3,
+        use_eye_gaze=True,
+        analysis_frame_stride=10,
+        show_preview=False,
+        enable_confidence_scoring=True,
+    )
+
+    return {
+        "segments": _serialise_segments(segments),
+        "looking_total_time": round(looking_total_time, 2),
+        "confidence_report": confidence_report,
+        "annotated_video": str(output_video_path.relative_to(PROJECT_DIR)),
+        "duration_seconds": round(duration, 2),
+        "duration_label": _format_duration(duration),
+    }
+
+
 def run_local_analysis():
     if ANALYSIS_SOURCE == "camera":
         return analyse_gaze(
@@ -86,6 +111,7 @@ def run_local_analysis():
             pitch_threshold=20,
             min_segment_duration=0.3,
             use_eye_gaze=True,
+            analysis_frame_stride=5,
             show_preview=False,
             enable_confidence_scoring=True,
         )
@@ -150,32 +176,47 @@ def upload_video():
             "duration_label": _format_duration(duration)
         }), 400
 
-    output_video_path = OUTPUT_DIR / f"{Path(filename).stem}-gaze.mp4"
-    segments, looking_total_time, confidence_report = analyse_gaze(
-        source_type="video",
-        video_path=str(saved_path),
-        output_video_path=str(output_video_path),
-        yaw_threshold=25,
-        pitch_threshold=20,
-        min_segment_duration=0.3,
-        use_eye_gaze=True,
-        show_preview=False,
-        enable_confidence_scoring=True,
-    )
-
     return jsonify({
         "ok": True,
-        "message": "Video uploaded, validated, and analysed successfully.",
+        "message": "Video uploaded and validated successfully.",
         "filename": filename,
         "path": str(saved_path.relative_to(PROJECT_DIR)),
         "duration_seconds": round(duration, 2),
         "duration_label": _format_duration(duration),
-        "analysis": {
-            "segments": _serialise_segments(segments),
-            "looking_total_time": round(looking_total_time, 2),
-            "confidence_report": confidence_report,
-            "annotated_video": str(output_video_path.relative_to(PROJECT_DIR)),
-        },
+        "next_step": "Ready for analysis."
+    })
+
+
+@app.post("/analyse")
+def analyse_uploaded_video():
+    data = request.get_json(silent=True) or {}
+    filename = data.get("filename")
+    if not filename:
+        return jsonify({"ok": False, "error": "No uploaded filename was provided."}), 400
+
+    safe_filename = secure_filename(filename)
+    if safe_filename != filename:
+        return jsonify({"ok": False, "error": "Invalid uploaded filename."}), 400
+
+    saved_path = UPLOAD_DIR / filename
+    if not saved_path.exists():
+        return jsonify({"ok": False, "error": "Uploaded video was not found."}), 404
+
+    duration = _get_video_duration(saved_path)
+    if duration is None:
+        return jsonify({
+            "ok": False,
+            "error": "The uploaded file could not be read as a valid video."
+        }), 400
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    analysis = _build_analysis_response(filename, saved_path, duration)
+
+    return jsonify({
+        "ok": True,
+        "message": "Video analysis completed successfully.",
+        "filename": filename,
+        "analysis": analysis,
         "next_step": "Analysis complete."
     })
 

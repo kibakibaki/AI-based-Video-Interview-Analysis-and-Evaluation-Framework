@@ -39,10 +39,10 @@ With the virtual environment activated:
 python backend/app.py
 ```
 
-Or run it directly without activation:
+Or run it directly from the project root:
 
 ```bash
-backend/venv311/bin/python backend/app.py
+./run_app.sh
 ```
 
 Then open:
@@ -81,6 +81,7 @@ backend/
     analysis_utils.py       Unified camera/video analysis flow and scoring loop
     gaze_utils.py           GazeTracking adapter for pupil/eye gaze detection
     head_pose_utils.py      Head pose estimation and head-facing-camera checks
+    visual_features.py      ML-ready visual feature aggregation
     confidence_scoring.py   Eye-contact confidence scoring
     video_utils.py          Frame extraction and basic face detection helpers
 frontend/
@@ -97,3 +98,25 @@ data/
 - Do not commit `backend/venv311/`; each user should create it locally.
 - On macOS, camera analysis may require terminal or IDE camera permissions.
 - The first MediaPipe import can be slow while local caches are created.
+
+## Visual Features
+
+The backend returns ML-ready visual features under:
+
+```text
+analysis.confidence_report.features
+```
+
+Current visual features include:
+
+- eye contact ratio
+- face visibility ratio
+- gaze center ratio
+- looking-away total time
+- longest looking-away duration
+- looking-away segments
+- head pitch/yaw/roll mean and standard deviation
+- head movement mean delta
+- head movement stability score
+- blink count and blink rate per minute
+- horizontal and vertical gaze ratio mean/std
