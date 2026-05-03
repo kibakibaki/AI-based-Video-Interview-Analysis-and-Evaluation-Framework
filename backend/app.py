@@ -1,36 +1,197 @@
-# app.py
-from video_utils import extract_frames, detect_faces
-from gaze_utils import analyse_gaze_from_camera, analyse_gaze_from_video
+import os
+import uuid
+from pathlib import Path
 
-video_path = "../data/video_sample/sample1.mp4"
-frames_folder = "../data/frames"
-faces_folder = "../data/faces"
-annotated_video = "../data/output/gaze_result.mp4"
+import cv2
+from flask import Flask, jsonify, request, send_from_directory
+from werkzeug.utils import secure_filename
 
-# Step 1: Extract frames from video
-# extract_frames(video_path, frames_folder)
+from face_analysis import analyse_gaze
 
-# Step 2: Detect faces from video frames
-# detect_faces(frames_folder, faces_folder)
 
-# Step 3: Analyse gaze / head direction from video
-# segments, total_time, confidence_report = analyse_gaze_from_video(
-#     video_path=video_path,
-#     output_video_path=annotated_video,
-#     yaw_threshold=25,
-#     pitch_threshold=20,
-#     min_segment_duration=0.3,
-#     enable_confidence_scoring=True
-# )
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = BASE_DIR.parent
+FRONTEND_DIR = PROJECT_DIR / "frontend"
+UPLOAD_DIR = PROJECT_DIR / "data" / "video_sample"
+OUTPUT_DIR = PROJECT_DIR / "data" / "output"
 
-# Temporary: analyse gaze / head direction from camera
-analyse_gaze_from_camera(
-    camera_index=0,
-    yaw_threshold=25,
-    pitch_threshold=20,
-    use_eye_gaze=True,
-    eye_yaw_weight=90,
-    enable_confidence_scoring=True
-)
+ALLOWED_EXTENSIONS = {".mp4", ".mov"}
+MAX_DURATION_SECONDS = 5 * 60
 
-print("Done.")
+# Change this variable to choose what happens when running this file directly.
+# "server" starts the upload website; "analysis" runs the local gaze analysis.
+APP_MODE = "analysis" #"server"
+
+# Change this variable to switch local analysis input.
+# Valid values: "camera" or "video".
+ANALYSIS_SOURCE = "camera" #"video" 
+
+LOCAL_VIDEO_PATH = UPLOAD_DIR / "sample1.mp4"
+LOCAL_OUTPUT_VIDEO_PATH = OUTPUT_DIR / "gaze_result.mp4"
+CAMERA_INDEX = 0
+
+app = Flask(__name__, static_folder=None)
+
+
+def _get_video_duration(video_path):
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return None
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    cap.release()
+
+    if fps <= 0 or frame_count <= 0:
+        return None
+
+    return frame_count / fps
+
+
+def _format_duration(seconds):
+    minutes = int(seconds // 60)
+    remaining_seconds = int(seconds % 60)
+    return f"{minutes:02d}:{remaining_seconds:02d}"
+
+
+def _serialise_segments(segments):
+    return [
+        {
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "duration": round(end - start, 2),
+        }
+        for start, end in segments
+    ]
+
+
+def run_local_analysis():
+    if ANALYSIS_SOURCE == "camera":
+        return analyse_gaze(
+            source_type="camera",
+            camera_index=CAMERA_INDEX,
+            yaw_threshold=25,
+            pitch_threshold=20,
+            use_eye_gaze=True,
+            eye_yaw_weight=90,
+            show_preview=True,
+            enable_confidence_scoring=True,
+        )
+
+    if ANALYSIS_SOURCE == "video":
+        return analyse_gaze(
+            source_type="video",
+            video_path=str(LOCAL_VIDEO_PATH),
+            output_video_path=str(LOCAL_OUTPUT_VIDEO_PATH),
+            yaw_threshold=25,
+            pitch_threshold=20,
+            min_segment_duration=0.3,
+            use_eye_gaze=True,
+            eye_yaw_weight=90,
+            show_preview=False,
+            enable_confidence_scoring=True,
+        )
+
+    raise ValueError('ANALYSIS_SOURCE must be either "camera" or "video"')
+
+
+@app.get("/")
+def index():
+    return send_from_directory(FRONTEND_DIR, "index.html")
+
+
+@app.get("/script.js")
+def script():
+    return send_from_directory(FRONTEND_DIR, "script.js")
+
+
+@app.get("/style.css")
+def style():
+    return send_from_directory(FRONTEND_DIR, "style.css")
+
+
+@app.post("/upload")
+def upload_video():
+    if "video" not in request.files:
+        return jsonify({"ok": False, "error": "No video file was provided."}), 400
+
+    video_file = request.files["video"]
+    if video_file.filename == "":
+        return jsonify({"ok": False, "error": "Please choose a video file first."}), 400
+
+    original_name = video_file.filename
+    extension = Path(original_name).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        return jsonify({
+            "ok": False,
+            "error": "Unsupported file format. Please upload an MP4 or MOV video."
+        }), 400
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    safe_stem = Path(secure_filename(original_name)).stem or "video"
+    filename = f"{safe_stem}-{uuid.uuid4().hex[:8]}{extension}"
+    saved_path = UPLOAD_DIR / filename
+    video_file.save(saved_path)
+
+    duration = _get_video_duration(saved_path)
+    if duration is None:
+        saved_path.unlink(missing_ok=True)
+        return jsonify({
+            "ok": False,
+            "error": "The uploaded file could not be read as a valid video."
+        }), 400
+
+    if duration > MAX_DURATION_SECONDS:
+        saved_path.unlink(missing_ok=True)
+        return jsonify({
+            "ok": False,
+            "error": "Video is too long. Maximum duration is 5 minutes.",
+            "duration_seconds": round(duration, 2),
+            "duration_label": _format_duration(duration)
+        }), 400
+
+    output_video_path = OUTPUT_DIR / f"{Path(filename).stem}-gaze.mp4"
+    segments, looking_total_time, confidence_report = analyse_gaze(
+        source_type="video",
+        video_path=str(saved_path),
+        output_video_path=str(output_video_path),
+        yaw_threshold=25,
+        pitch_threshold=20,
+        min_segment_duration=0.3,
+        use_eye_gaze=True,
+        eye_yaw_weight=90,
+        show_preview=False,
+        enable_confidence_scoring=True,
+    )
+
+    return jsonify({
+        "ok": True,
+        "message": "Video uploaded, validated, and analysed successfully.",
+        "filename": filename,
+        "path": str(saved_path.relative_to(PROJECT_DIR)),
+        "duration_seconds": round(duration, 2),
+        "duration_label": _format_duration(duration),
+        "analysis": {
+            "segments": _serialise_segments(segments),
+            "looking_total_time": round(looking_total_time, 2),
+            "confidence_report": confidence_report,
+            "annotated_video": str(output_video_path.relative_to(PROJECT_DIR)),
+        },
+        "next_step": "Analysis complete."
+    })
+
+
+def run_server():
+    port = int(os.environ.get("PORT", "5001"))
+    app.run(debug=True, host="127.0.0.1", port=port)
+
+
+if __name__ == "__main__":
+    if APP_MODE == "server":
+        run_server()
+    elif APP_MODE == "analysis":
+        run_local_analysis()
+    else:
+        raise ValueError('APP_MODE must be either "server" or "analysis"')

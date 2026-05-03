@@ -70,6 +70,11 @@ form.addEventListener("submit", async (event) => {
       File: result.filename,
       Duration: result.duration_label,
       Saved: result.path,
+      "Eye contact score": `${result.analysis.confidence_report.overall_score}/100`,
+      "Confidence label": result.analysis.confidence_report.label,
+      "Looking time": `${result.analysis.looking_total_time}s`,
+      "Looking segments": result.analysis.segments.length,
+      "Annotated video": result.analysis.annotated_video,
       "Next step": result.next_step,
     });
   } catch (error) {
