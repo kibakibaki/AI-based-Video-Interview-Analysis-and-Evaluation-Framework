@@ -77,13 +77,14 @@ When `ANALYSIS_SOURCE = "video"`, update `LOCAL_VIDEO_PATH` in `backend/app.py` 
 backend/
   app.py                  Flask app and local analysis entry point
   requirements.txt        Python dependencies
-  face_analysis/
-    analysis_utils.py       Unified camera/video analysis flow and scoring loop
-    gaze_utils.py           GazeTracking adapter for pupil/eye gaze detection
-    head_pose_utils.py      Head pose estimation and head-facing-camera checks
-    visual_features.py      ML-ready visual feature aggregation
-    confidence_scoring.py   Eye-contact confidence scoring
-    video_utils.py          Frame extraction and basic face detection helpers
+  Vision/
+    face_analysis/
+      analysis_utils.py       Unified camera/video analysis flow and scoring loop
+      gaze_utils.py           GazeTracking adapter for pupil/eye gaze detection
+      head_pose_utils.py      Head pose estimation and head-facing-camera checks
+      visual_features.py      ML-ready visual feature aggregation
+      confidence_scoring.py   Eye-contact confidence scoring
+      video_utils.py          Frame extraction and basic face detection helpers
 frontend/
   index.html              Upload page
   script.js               Upload request and result display

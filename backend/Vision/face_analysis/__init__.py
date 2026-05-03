@@ -1,4 +1,4 @@
-"""Face analysis package for interview video processing."""
+"""Face analysis tools for interview video processing."""
 
 from .analysis_utils import analyse_gaze
 
