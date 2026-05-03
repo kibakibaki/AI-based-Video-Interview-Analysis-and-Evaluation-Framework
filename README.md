@@ -90,7 +90,7 @@ frontend/
   style.css               Page styling
 data/
   video_sample/           Uploaded videos named sample1, sample2, sample3, ...
-  output/                 CSV analysis results
+  output/                 Summary CSV and sliding-window CSV analysis results
 ```
 
 ## Notes
@@ -115,8 +115,19 @@ Current visual features include:
 - looking-away total time
 - longest looking-away duration
 - looking-away segments
-- head pitch/yaw/roll mean and standard deviation
+- head pitch offset, yaw, and roll mean/std
 - head movement mean delta
 - head movement stability score
 - blink count and blink rate per minute
 - horizontal and vertical gaze ratio mean/std
+
+For each uploaded video, the backend writes two CSV files:
+
+```text
+data/output/sample1.csv
+data/output/sample1_windows.csv
+```
+
+`sample1.csv` contains one summary row for the whole video. `sample1_windows.csv`
+contains sliding-window visual features without cutting the original video file.
+The default window setup is 5 seconds with a 1 second step.

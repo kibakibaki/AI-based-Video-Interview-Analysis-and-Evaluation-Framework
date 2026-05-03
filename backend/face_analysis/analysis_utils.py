@@ -255,6 +255,7 @@ def analyse_gaze(
 
     looking_total_time = sum(end - start for start, end in segments)
     visual_features = visual_feature_tracker.finish(total_duration)
+    window_features = visual_feature_tracker.window_features(total_duration)
 
     print("\n Looking at camera time segments ")
     if not segments:
@@ -270,6 +271,7 @@ def analyse_gaze(
     if confidence_scorer is not None:
         confidence_report = confidence_scorer.report()
         confidence_report["features"] = visual_features
+        confidence_report["window_features"] = window_features
         print_confidence_report(confidence_report)
 
     return segments, looking_total_time, confidence_report
