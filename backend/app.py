@@ -1,5 +1,5 @@
+import csv
 import os
-import uuid
 from pathlib import Path
 
 import cv2
@@ -27,7 +27,6 @@ APP_MODE = "server" #"analysis"
 ANALYSIS_SOURCE = "video" #"camera"
 
 LOCAL_VIDEO_PATH = UPLOAD_DIR / "sample1.mp4"
-LOCAL_OUTPUT_VIDEO_PATH = OUTPUT_DIR / "gaze_result.mp4"
 CAMERA_INDEX = 0
 
 app = Flask(__name__, static_folder=None)
@@ -65,12 +64,53 @@ def _serialise_segments(segments):
     ]
 
 
+def _next_sample_filename(extension):
+    existing_numbers = []
+    for path in UPLOAD_DIR.iterdir():
+        if path.suffix.lower() not in ALLOWED_EXTENSIONS:
+            continue
+        stem = path.stem
+        if stem.startswith("sample") and stem[6:].isdigit():
+            existing_numbers.append(int(stem[6:]))
+
+    next_number = max(existing_numbers, default=0) + 1
+    return f"sample{next_number}{extension}"
+
+
+def _write_analysis_csv(filename, duration, analysis):
+    csv_path = OUTPUT_DIR / f"{Path(filename).stem}.csv"
+    confidence_report = analysis["confidence_report"]
+    features = confidence_report.get("features", {})
+
+    row = {
+        "filename": filename,
+        "duration_seconds": round(duration, 2),
+        "duration_label": _format_duration(duration),
+        "overall_score": confidence_report.get("overall_score"),
+        "confidence_label": confidence_report.get("label"),
+        "looking_total_time": analysis["looking_total_time"],
+        "looking_segments_count": len(analysis["segments"]),
+    }
+
+    for key, value in features.items():
+        if isinstance(value, list):
+            row[key] = repr(value)
+        else:
+            row[key] = value
+
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(row.keys()))
+        writer.writeheader()
+        writer.writerow(row)
+
+    return csv_path
+
+
 def _build_analysis_response(filename, saved_path, duration):
-    output_video_path = OUTPUT_DIR / f"{Path(filename).stem}-gaze.mp4"
     segments, looking_total_time, confidence_report = analyse_gaze(
         source_type="video",
         video_path=str(saved_path),
-        output_video_path=str(output_video_path),
+        output_video_path=None,
         yaw_threshold=25,
         pitch_threshold=20,
         min_segment_duration=0.3,
@@ -80,14 +120,17 @@ def _build_analysis_response(filename, saved_path, duration):
         enable_confidence_scoring=True,
     )
 
-    return {
+    analysis = {
         "segments": _serialise_segments(segments),
         "looking_total_time": round(looking_total_time, 2),
         "confidence_report": confidence_report,
-        "annotated_video": str(output_video_path.relative_to(PROJECT_DIR)),
         "duration_seconds": round(duration, 2),
         "duration_label": _format_duration(duration),
     }
+    csv_path = _write_analysis_csv(filename, duration, analysis)
+    analysis["csv_path"] = str(csv_path.relative_to(PROJECT_DIR))
+
+    return analysis
 
 
 def run_local_analysis():
@@ -106,7 +149,7 @@ def run_local_analysis():
         return analyse_gaze(
             source_type="video",
             video_path=str(LOCAL_VIDEO_PATH),
-            output_video_path=str(LOCAL_OUTPUT_VIDEO_PATH),
+            output_video_path=None,
             yaw_threshold=25,
             pitch_threshold=20,
             min_segment_duration=0.3,
@@ -154,8 +197,7 @@ def upload_video():
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    safe_stem = Path(secure_filename(original_name)).stem or "video"
-    filename = f"{safe_stem}-{uuid.uuid4().hex[:8]}{extension}"
+    filename = _next_sample_filename(extension)
     saved_path = UPLOAD_DIR / filename
     video_file.save(saved_path)
 
