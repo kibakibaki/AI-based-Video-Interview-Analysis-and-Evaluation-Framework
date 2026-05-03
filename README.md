@@ -1,6 +1,6 @@
 # AI-based Video Interview Analysis and Evaluation Framework
 
-This project is a prototype for video interview upload, gaze analysis, and eye-contact confidence scoring. The backend uses Flask, OpenCV, MediaPipe, and NumPy.
+This project is a prototype for video interview upload, gaze analysis, and eye-contact confidence scoring. The backend uses Flask, OpenCV, MediaPipe, GazeTracking, dlib, and NumPy.
 
 ## Environment Setup
 
@@ -23,6 +23,13 @@ pip install -r backend/requirements.txt
 ```
 
 After activation, `python` and `pip` should point to the virtual environment.
+
+This project installs `antoinelame/GazeTracking` directly from GitHub. It also depends on `dlib`; if `dlib` fails to install on macOS, install CMake first:
+
+```bash
+brew install cmake
+pip install -r backend/requirements.txt
+```
 
 ## Run The Upload Website
 
@@ -72,7 +79,7 @@ backend/
   requirements.txt        Python dependencies
   face_analysis/
     analysis_utils.py       Unified camera/video analysis flow and scoring loop
-    gaze_utils.py           Placeholder for future pupil/eye gaze detection logic
+    gaze_utils.py           GazeTracking adapter for pupil/eye gaze detection
     head_pose_utils.py      Head pose estimation and head-facing-camera checks
     confidence_scoring.py   Eye-contact confidence scoring
     video_utils.py          Frame extraction and basic face detection helpers

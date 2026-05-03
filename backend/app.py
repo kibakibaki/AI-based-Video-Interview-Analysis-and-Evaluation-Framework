@@ -73,7 +73,6 @@ def run_local_analysis():
             yaw_threshold=25,
             pitch_threshold=20,
             use_eye_gaze=True,
-            eye_yaw_weight=90,
             show_preview=True,
             enable_confidence_scoring=True,
         )
@@ -87,7 +86,6 @@ def run_local_analysis():
             pitch_threshold=20,
             min_segment_duration=0.3,
             use_eye_gaze=True,
-            eye_yaw_weight=90,
             show_preview=False,
             enable_confidence_scoring=True,
         )
@@ -161,7 +159,6 @@ def upload_video():
         pitch_threshold=20,
         min_segment_duration=0.3,
         use_eye_gaze=True,
-        eye_yaw_weight=90,
         show_preview=False,
         enable_confidence_scoring=True,
     )

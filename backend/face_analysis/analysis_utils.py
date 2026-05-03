@@ -2,9 +2,9 @@
 import cv2
 import os
 import mediapipe as mp
-import numpy as np
 
 from .confidence_scoring import ConfidenceScorer, FrameObservation, print_confidence_report
+from .gaze_utils import PupilGazeTracker
 from .head_pose_utils import (
     angle_distance_from_front,
     draw_head_direction,
@@ -13,60 +13,18 @@ from .head_pose_utils import (
 )
 
 
-def _landmark_xy(face_landmarks, idx):
-    lm = face_landmarks.landmark[idx]
-    return np.array([lm.x, lm.y], dtype="double")
-
-
-def _iris_center(face_landmarks, iris_ids):
-    points = [_landmark_xy(face_landmarks, idx) for idx in iris_ids]
-    return np.mean(points, axis=0)
-
-
-def _eye_horizontal_offset(face_landmarks, corner_a, corner_b, iris_ids):
-    corner_points = [_landmark_xy(face_landmarks, corner_a), _landmark_xy(face_landmarks, corner_b)]
-    left_corner = min(corner_points, key=lambda point: point[0])
-    right_corner = max(corner_points, key=lambda point: point[0])
-
-    eye_width = right_corner[0] - left_corner[0]
-    if eye_width <= 0:
-        return 0.0
-
-    iris = _iris_center(face_landmarks, iris_ids)
-    eye_mid_x = (left_corner[0] + right_corner[0]) / 2
-
-    return (iris[0] - eye_mid_x) / eye_width
-
-
-def _get_eye_gaze_offset(face_landmarks):
-    """
-    Estimate horizontal iris offset inside both eyes.
-    Negative/positive direction depends on camera mirroring, so the caller uses magnitude.
-    """
-    left_eye_offset = _eye_horizontal_offset(face_landmarks, 33, 133, range(468, 473))
-    right_eye_offset = _eye_horizontal_offset(face_landmarks, 362, 263, range(473, 478))
-    return (left_eye_offset + right_eye_offset) / 2
-
-
 def _is_looking_at_camera(
     pitch,
     yaw,
     yaw_threshold,
     pitch_threshold,
-    eye_gaze_offset=None,
-    eye_yaw_weight=90
+    gaze_observation=None
 ):
-    if eye_gaze_offset is None:
-        return is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold)
+    head_facing = is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold)
+    if gaze_observation is None or gaze_observation.direction is None:
+        return head_facing
 
-    pitch_offset = angle_distance_from_front(pitch)
-    yaw_offset = abs(yaw)
-    compensated_yaw_offset = yaw_offset
-
-    eye_compensation = abs(eye_gaze_offset) * eye_yaw_weight
-    compensated_yaw_offset = max(0, yaw_offset - eye_compensation)
-
-    return compensated_yaw_offset <= yaw_threshold and pitch_offset <= pitch_threshold
+    return head_facing and gaze_observation.is_center
 
 
 def analyse_gaze(
@@ -78,7 +36,6 @@ def analyse_gaze(
     pitch_threshold=15,
     min_segment_duration=0.3,
     use_eye_gaze=True,
-    eye_yaw_weight=90,
     show_preview=None,
     enable_confidence_scoring=True
 ):
@@ -94,8 +51,7 @@ def analyse_gaze(
         yaw_threshold: abs(yaw) <= threshold => looking at camera
         pitch_threshold: abs(pitch) <= threshold => looking at camera
         min_segment_duration: minimum duration (seconds) to keep
-        use_eye_gaze: combine iris horizontal offset with head yaw
-        eye_yaw_weight: conversion weight from iris offset to yaw compensation
+        use_eye_gaze: combine GazeTracking pupil direction with head pose
         show_preview: whether to show OpenCV preview window
 
     Returns:
@@ -143,6 +99,7 @@ def analyse_gaze(
     frame_idx = 0
     segments = []
     confidence_scorer = ConfidenceScorer() if enable_confidence_scoring else None
+    pupil_gaze_tracker = PupilGazeTracker() if use_eye_gaze else None
 
     current_segment_start = None
 
@@ -165,9 +122,11 @@ def analyse_gaze(
             is_looking = False
             label = "No face"
             pitch = yaw = roll = None
-            eye_gaze_offset = None
-            compensated_yaw_offset = None
+            gaze_observation = None
             face_detected = False
+
+            if pupil_gaze_tracker is not None:
+                gaze_observation = pupil_gaze_tracker.analyse_frame(frame)
 
             if results.multi_face_landmarks:
                 face_detected = True
@@ -176,21 +135,13 @@ def analyse_gaze(
 
                 if pose is not None:
                     pitch, yaw, roll, rvec, tvec, camera_matrix, dist_coeffs = pose
-                    if use_eye_gaze:
-                        eye_gaze_offset = _get_eye_gaze_offset(face_landmarks)
-                        compensated_yaw_offset = max(
-                            0,
-                            abs(yaw) - abs(eye_gaze_offset) * eye_yaw_weight
-                        )
 
-                    # Rough rule: facing camera if yaw/pitch offsets are both small
                     if _is_looking_at_camera(
                         pitch,
                         yaw,
                         yaw_threshold,
                         pitch_threshold,
-                        eye_gaze_offset=eye_gaze_offset,
-                        eye_yaw_weight=eye_yaw_weight
+                        gaze_observation=gaze_observation
                     ):
                         is_looking = True
                         label = "Looking at camera"
@@ -232,12 +183,19 @@ def analyse_gaze(
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             text_y = 200
-            if eye_gaze_offset is not None and compensated_yaw_offset is not None:
-                cv2.putText(frame, f"Eye offset: {eye_gaze_offset:.2f}", (20, text_y),
+            if gaze_observation is not None:
+                gaze_label = gaze_observation.direction or "unknown"
+                cv2.putText(frame, f"Gaze: {gaze_label}", (20, text_y),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(frame, f"Comp yaw: {compensated_yaw_offset:.1f}", (20, text_y + 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                text_y += 60
+                if gaze_observation.horizontal_ratio is not None:
+                    cv2.putText(frame, f"Gaze H: {gaze_observation.horizontal_ratio:.2f}", (20, text_y + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    text_y += 30
+                if gaze_observation.left_pupil is not None:
+                    cv2.circle(frame, gaze_observation.left_pupil, 3, (0, 255, 255), -1)
+                if gaze_observation.right_pupil is not None:
+                    cv2.circle(frame, gaze_observation.right_pupil, 3, (0, 255, 255), -1)
+                text_y += 30
 
             if confidence_scorer is not None:
                 cv2.putText(frame, f"Confidence: {confidence_scorer.overall_score:.1f}/100", (20, text_y),

@@ -2,3 +2,5 @@ flask
 opencv-python
 mediapipe
 numpy
+dlib
+git+https://github.com/antoinelame/GazeTracking.git
