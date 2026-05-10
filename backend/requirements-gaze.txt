@@ -1,0 +1,7 @@
+# Install this after backend/requirements.txt with:
+# python -m pip install --no-deps -r backend/requirements-gaze.txt
+#
+# The upstream package currently declares numpy>=2, while mediapipe==0.10.21
+# requires numpy<2. The package works with the NumPy/OpenCV/dlib versions
+# installed by backend/requirements.txt, so we install it without dependencies.
+git+https://github.com/antoinelame/GazeTracking.git

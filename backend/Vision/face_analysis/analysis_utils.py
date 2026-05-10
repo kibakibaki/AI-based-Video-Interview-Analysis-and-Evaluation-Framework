@@ -14,6 +14,17 @@ from .head_pose_utils import (
 from .visual_features import VisualFeatureTracker
 
 
+def _face_mesh_solution():
+    try:
+        return mp.solutions.face_mesh
+    except AttributeError as exc:
+        raise RuntimeError(
+            "Installed mediapipe package does not provide mp.solutions.face_mesh. "
+            "Install the supported dependency versions with: "
+            "`python -m pip install --force-reinstall -r backend/requirements.txt`"
+        ) from exc
+
+
 def _is_looking_at_camera(
     pitch,
     yaw,
@@ -81,7 +92,7 @@ def analyse_gaze(
         cap = cv2.VideoCapture(camera_index)
         source_label = f"camera {camera_index}"
 
-    mp_face_mesh = mp.solutions.face_mesh
+    mp_face_mesh = _face_mesh_solution()
 
     if not cap.isOpened():
         raise ValueError(f"Cannot open {source_label}")
@@ -255,6 +266,7 @@ def analyse_gaze(
 
     looking_total_time = sum(end - start for start, end in segments)
     visual_features = visual_feature_tracker.finish(total_duration)
+    window_features = visual_feature_tracker.window_features(total_duration)
 
     print("\n Looking at camera time segments ")
     if not segments:
@@ -270,6 +282,7 @@ def analyse_gaze(
     if confidence_scorer is not None:
         confidence_report = confidence_scorer.report()
         confidence_report["features"] = visual_features
+        confidence_report["window_features"] = window_features
         print_confidence_report(confidence_report)
 
     return segments, looking_total_time, confidence_report

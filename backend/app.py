@@ -106,6 +106,29 @@ def _write_analysis_csv(filename, duration, analysis):
     return csv_path
 
 
+def _write_window_features_csv(filename, analysis):
+    window_rows = analysis["confidence_report"].get("window_features", [])
+    csv_path = OUTPUT_DIR / f"{Path(filename).stem}_windows.csv"
+
+    if not window_rows:
+        with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+            csv_file.write("filename\n")
+        return csv_path
+
+    rows = []
+    for window_row in window_rows:
+        row = {"filename": filename}
+        row.update(window_row)
+        rows.append(row)
+
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return csv_path
+
+
 def _build_analysis_response(filename, saved_path, duration):
     segments, looking_total_time, confidence_report = analyse_gaze(
         source_type="video",
@@ -128,7 +151,9 @@ def _build_analysis_response(filename, saved_path, duration):
         "duration_label": _format_duration(duration),
     }
     csv_path = _write_analysis_csv(filename, duration, analysis)
+    window_csv_path = _write_window_features_csv(filename, analysis)
     analysis["csv_path"] = str(csv_path.relative_to(PROJECT_DIR))
+    analysis["window_csv_path"] = str(window_csv_path.relative_to(PROJECT_DIR))
 
     return analysis
 
