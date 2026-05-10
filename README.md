@@ -4,31 +4,70 @@ This project is a prototype for video interview upload, gaze analysis, and eye-c
 
 ## Environment Setup
 
-The virtual environment is intentionally not committed to Git. After cloning the repository, create and activate your own local environment:
+The virtual environment is intentionally not committed to Git. After cloning the repository, create and activate your own local environment.
+
+First, check whether Python 3.11 is available:
+
+```bash
+python3.11 --version
+```
+
+If this prints a version number, create the environment with:
 
 ```bash
 python3.11 -m venv backend/venv311
 source backend/venv311/bin/activate
-pip install --upgrade pip
-pip install -r backend/requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r backend/requirements.txt
+python -m pip install --no-deps -r backend/requirements-gaze.txt
 ```
 
-If `python3.11` is not available, install Python 3.11 first or use another compatible Python 3 version:
+If `python3.11` is not found on macOS, install it with Homebrew:
 
 ```bash
-python3 -m venv backend/venv311
+brew install python@3.11
+/opt/homebrew/opt/python@3.11/bin/python3.11 -m venv backend/venv311
 source backend/venv311/bin/activate
-pip install --upgrade pip
-pip install -r backend/requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r backend/requirements.txt
+python -m pip install --no-deps -r backend/requirements-gaze.txt
 ```
 
-After activation, `python` and `pip` should point to the virtual environment.
+If you are on an Intel Mac and Homebrew is installed under `/usr/local`, use this path instead:
 
-This project installs `antoinelame/GazeTracking` directly from GitHub. It also depends on `dlib`; if `dlib` fails to install on macOS, install CMake first:
+```bash
+/usr/local/opt/python@3.11/bin/python3.11 -m venv backend/venv311
+```
+
+After activation, `python` should point to the virtual environment. Use `python -m pip` instead of plain `pip`; this avoids installing packages into the wrong Python environment.
+
+If `backend/venv311` already exists but points to a missing Python executable, remove it and recreate it:
+
+```bash
+rm -rf backend/venv311
+/opt/homebrew/opt/python@3.11/bin/python3.11 -m venv backend/venv311
+source backend/venv311/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r backend/requirements.txt
+python -m pip install --no-deps -r backend/requirements-gaze.txt
+```
+
+This project installs `antoinelame/GazeTracking` directly from GitHub. Install it with `--no-deps` because the upstream package metadata currently asks for a newer NumPy than the MediaPipe version used by this project.
+
+The project also depends on `dlib`; if `dlib` fails to install on macOS, install CMake first:
 
 ```bash
 brew install cmake
-pip install -r backend/requirements.txt
+python -m pip install -r backend/requirements.txt
+python -m pip install --no-deps -r backend/requirements-gaze.txt
+```
+
+If analysis fails with `module 'mediapipe' has no attribute 'solutions'`, your environment has an incompatible MediaPipe release. Reinstall the pinned project dependencies:
+
+```bash
+source backend/venv311/bin/activate
+python -m pip install --force-reinstall -r backend/requirements.txt
+python -m pip install --force-reinstall --no-deps -r backend/requirements-gaze.txt
 ```
 
 ## Run The Upload Website
@@ -52,6 +91,44 @@ http://127.0.0.1:5001
 ```
 
 Upload an MP4 or MOV video. The backend validates the video, runs gaze analysis, and returns the confidence report.
+
+## Run The Desktop Labelling Tool
+
+The labelling tool is independent from the upload website. Use it to prepare manually labelled training data from videos in `sample_vid/`. It creates its own sliding windows and does not require the main app to analyse the video first.
+
+From the project root:
+
+```bash
+./run_labeling_app.sh
+```
+
+Without `--filename`, the tool resumes from the first unfinished video/window in `sample_vid/` based on the existing rows in `data/labels/manual_window_labels.csv`.
+
+If the script reports that Tkinter is not available, install the desktop window support for Homebrew Python:
+
+```bash
+brew install python-tk@3.11
+```
+
+To label a specific video:
+
+```bash
+./run_labeling_app.sh --filename sample1.mp4
+```
+
+By default, the tool uses 5 second windows with a 5 second step, so windows do not overlap during manual labelling. You can change this for dataset creation:
+
+```bash
+./run_labeling_app.sh --filename sample1.mp4 --window-size 10 --step-size 10
+```
+
+The tool opens a desktop window, prepares window clips under `data/window_clips/`, plays one window at a time, and writes manual 1-5 labels to:
+
+```text
+data/labels/manual_window_labels.csv
+```
+
+This labelling step is for dataset creation and model training data. It is not part of the main interview analysis app.
 
 ## Switch Camera Or Video Analysis
 
@@ -89,8 +166,14 @@ frontend/
   script.js               Upload request and result display
   style.css               Page styling
 data/
-  video_sample/           Uploaded videos named sample1, sample2, sample3, ...
+  video_sample/           Uploaded videos from the main app
   output/                 Summary CSV and sliding-window CSV analysis results
+  labels/                 Manual labels for model training
+  window_clips/           Generated clips for manual labelling
+sample_vid/               Source videos for the standalone labelling tool
+tools/
+  create_label_sheets.py  Builds/refreshes CSV label sheets
+  labeling_app.py         Desktop window tool for manual labels
 ```
 
 ## Notes
@@ -130,4 +213,4 @@ data/output/sample1_windows.csv
 
 `sample1.csv` contains one summary row for the whole video. `sample1_windows.csv`
 contains sliding-window visual features without cutting the original video file.
-The default window setup is 5 seconds with a 1 second step.
+The main analysis output uses 5 second windows with a 1 second step. The standalone manual labelling tool defaults to 5 second windows with a 5 second step to reduce annotation workload.

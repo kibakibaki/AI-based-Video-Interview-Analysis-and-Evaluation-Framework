@@ -1,4 +1,6 @@
 data/video_sample/
+sample_vid/
+data/window_clips/
 data/frames/
 data/faces/
 backend/venv311/

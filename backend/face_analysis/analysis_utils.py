@@ -14,6 +14,17 @@ from .head_pose_utils import (
 from .visual_features import VisualFeatureTracker
 
 
+def _face_mesh_solution():
+    try:
+        return mp.solutions.face_mesh
+    except AttributeError as exc:
+        raise RuntimeError(
+            "Installed mediapipe package does not provide mp.solutions.face_mesh. "
+            "Install the supported dependency versions with: "
+            "`python -m pip install --force-reinstall -r backend/requirements.txt`"
+        ) from exc
+
+
 def _is_looking_at_camera(
     pitch,
     yaw,
@@ -81,7 +92,7 @@ def analyse_gaze(
         cap = cv2.VideoCapture(camera_index)
         source_label = f"camera {camera_index}"
 
-    mp_face_mesh = mp.solutions.face_mesh
+    mp_face_mesh = _face_mesh_solution()
 
     if not cap.isOpened():
         raise ValueError(f"Cannot open {source_label}")
