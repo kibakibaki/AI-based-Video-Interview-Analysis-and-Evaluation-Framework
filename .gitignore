@@ -8,3 +8,6 @@ data/window_clips/
 data/frames/
 data/faces/
 backend/venv311/
+__pycache__/
+*.py[cod]
+.DS_Store

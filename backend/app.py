@@ -6,7 +6,7 @@ import cv2
 from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
-from face_analysis import analyse_gaze
+from Vision import analyse_gaze
 
 
 BASE_DIR = Path(__file__).resolve().parent
