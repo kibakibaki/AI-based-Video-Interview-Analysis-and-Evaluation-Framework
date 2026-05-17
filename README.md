@@ -102,7 +102,13 @@ From the project root:
 ./run_labeling_app.sh
 ```
 
-Without `--filename`, the tool resumes from the first unfinished video/window in `sample_vid/` based on the existing rows in `data/labels/manual_window_labels.csv`.
+Without `--filename`, the tool randomly samples unlabelled windows across all videos in `sample_vid/`. Windows already saved in `data/labels/manual_window_labels.csv` are skipped, and each new run reshuffles the remaining unlabelled windows.
+
+To label only a random subset in one session:
+
+```bash
+./run_labeling_app.sh --limit 50
+```
 
 If the script reports that Tkinter is not available, install the desktop window support for Homebrew Python:
 
@@ -116,19 +122,45 @@ To label a specific video:
 ./run_labeling_app.sh --filename sample1.mp4
 ```
 
-By default, the tool uses 5 second windows with a 5 second step, so windows do not overlap during manual labelling. You can change this for dataset creation:
+With `--filename`, the tool randomly samples only the unlabelled windows from that video.
+
+By default, the tool uses 3 second windows with a 3 second step, so windows do not overlap during manual labelling. You can change this for dataset creation:
 
 ```bash
-./run_labeling_app.sh --filename sample1.mp4 --window-size 10 --step-size 10
+./run_labeling_app.sh --filename sample1.mp4 --window-size 6 --step-size 6
 ```
 
-The tool opens a desktop window, prepares window clips under `data/window_clips/`, plays one window at a time, and writes manual 1-5 labels to:
+The tool opens a desktop window, plays each window directly from the source video in `sample_vid/`, and writes checkbox-based Y/N observation labels to:
 
 ```text
 data/labels/manual_window_labels.csv
 ```
 
 This labelling step is for dataset creation and model training data. It is not part of the main interview analysis app.
+
+## Generate Automatic Training Features
+
+To generate window-level visual features for videos in `sample_vid/`:
+
+```bash
+source backend/venv311/bin/activate
+python tools/analyse_sample_videos.py
+```
+
+To analyse one video:
+
+```bash
+python tools/analyse_sample_videos.py --filename sample1.mp4
+```
+
+The script writes:
+
+```text
+data/output/sample1.csv
+data/output/sample1_windows.csv
+```
+
+`*_windows.csv` contains the automatic 3 second window features used as model input `X`. These rows align with `data/labels/manual_window_labels.csv`.
 
 ## Switch Camera Or Video Analysis
 
@@ -170,7 +202,7 @@ data/
   video_sample/           Uploaded videos from the main app
   output/                 Summary CSV and sliding-window CSV analysis results
   labels/                 Manual labels for model training
-  window_clips/           Generated clips for manual labelling
+  window_clips/           Legacy/generated clips, not required by the current labelling tool
 sample_vid/               Source videos for the standalone labelling tool
 tools/
   create_label_sheets.py  Builds/refreshes CSV label sheets
@@ -214,4 +246,4 @@ data/output/sample1_windows.csv
 
 `sample1.csv` contains one summary row for the whole video. `sample1_windows.csv`
 contains sliding-window visual features without cutting the original video file.
-The main analysis output uses 5 second windows with a 1 second step. The standalone manual labelling tool defaults to 5 second windows with a 5 second step to reduce annotation workload.
+The main analysis output and standalone manual labelling tool both use 3 second windows with a 3 second step so training features and labels align.

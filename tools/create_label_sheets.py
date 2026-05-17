@@ -28,34 +28,64 @@ DEFAULT_CLIP_ROOT = PROJECT_ROOT / "data" / "window_clips"
 
 LABEL_FIELDS = [
     {
-        "name": "confidence_score",
-        "label": "Confidence",
-        "hint": "1 = very low confidence, 5 = very confident.",
+        "name": "face_not_visible",
+        "label": "Face Not Visible",
+        "hint": "Y if the face is missing, blocked, or too unclear to judge.",
     },
     {
-        "name": "focus_score",
-        "label": "Focus",
-        "hint": "1 = distracted, 5 = highly focused.",
+        "name": "frequent_looking_away",
+        "label": "Frequent Looking Away",
+        "hint": "Y if the candidate repeatedly looks away from the camera.",
     },
     {
-        "name": "engagement_score",
-        "label": "Engagement",
-        "hint": "1 = disengaged, 5 = highly engaged.",
+        "name": "excessive_head_movement",
+        "label": "Excessive Head Movement",
+        "hint": "Y if head motion is noticeably unstable or distracting.",
     },
     {
-        "name": "calmness_score",
-        "label": "Calmness",
-        "hint": "1 = very nervous, 5 = calm and composed.",
+        "name": "noticeable_fidgeting",
+        "label": "Noticeable Fidgeting",
+        "hint": "Y if there is visible restless movement or fidgeting.",
     },
     {
-        "name": "eye_contact_score",
-        "label": "Eye Contact",
-        "hint": "1 = poor/inconsistent, 5 = stable and natural.",
+        "name": "distracted_by_offscreen_activity",
+        "label": "Offscreen Distraction",
+        "hint": "Y if the candidate appears distracted by something offscreen.",
     },
     {
-        "name": "professional_presence_score",
-        "label": "Professional Presence",
-        "hint": "1 = unprofessional impression, 5 = polished and professional.",
+        "name": "camera_or_video_issue",
+        "label": "Camera Or Video Issue",
+        "hint": "Y if blur, freeze, lighting, framing, or camera movement affects the clip.",
+    },
+    {
+        "name": "reading_from_screen_or_notes",
+        "label": "Reading Notes",
+        "hint": "Y if the candidate appears to read from notes, a script, or another screen.",
+    },
+    {
+        "name": "looking_down_frequently",
+        "label": "Looking Down",
+        "hint": "Y if the candidate repeatedly looks downward.",
+    },
+    {
+        "name": "body_out_of_frame",
+        "label": "Body Out Of Frame",
+        "hint": "Y if the head or upper body moves partly out of the visible frame.",
+    },
+    {
+        "name": "poor_lighting",
+        "label": "Poor Lighting",
+        "hint": "Y if the lighting is too dark, too bright, or uneven enough to affect judgement.",
+    },
+    {
+        "name": "background_distraction_visible",
+        "label": "Background Distraction",
+        "hint": "Y if the background contains a noticeable visual distraction.",
+    },
+    {
+        "name": "hand_to_face_or_hair",
+        "label": "Hand To Face Or Hair",
+        "hint": "Y if the candidate touches their face, hair, glasses, or headset.",
     },
 ]
 

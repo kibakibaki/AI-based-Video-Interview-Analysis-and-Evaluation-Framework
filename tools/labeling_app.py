@@ -8,12 +8,13 @@ Run from the project root:
 
 Optional:
 
-    python tools/labeling_app.py --filename sample1.mov
+    python tools/labeling_app.py --filename sample1.mp4
 """
 
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from pathlib import Path
 
@@ -38,14 +39,13 @@ import create_label_sheets as sheets
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VIDEO_DIR = PROJECT_ROOT / "sample_vid"
 LABEL_DIR = PROJECT_ROOT / "data" / "labels"
-CLIP_ROOT = PROJECT_ROOT / "data" / "window_clips"
 WINDOW_LABEL_PATH = LABEL_DIR / "manual_window_labels.csv"
 VIDEO_LABEL_PATH = LABEL_DIR / "manual_video_labels.csv"
 
 VIDEO_CANVAS_SIZE = (720, 405)
-DEFAULT_WINDOW_SIZE = 5.0
-DEFAULT_STEP_SIZE = 5.0
-VALID_SCORES = {"1", "2", "3", "4", "5"}
+DEFAULT_WINDOW_SIZE = 3.0
+DEFAULT_STEP_SIZE = 3.0
+VALID_LABEL_VALUES = {"Y", "N"}
 
 
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -66,48 +66,51 @@ def sample_sort_key(path_or_name: Path | str) -> tuple[int, str]:
 
 def available_filenames() -> list[str]:
     filenames = []
+    seen_stems = set()
     video_paths = sorted(VIDEO_DIR.iterdir(), key=sample_sort_key) if VIDEO_DIR.exists() else []
     for path in video_paths:
         if path.suffix.lower() in {".mp4", ".mov"}:
             filenames.append(path.name)
+            seen_stems.add(path.stem)
 
     for row in read_csv_rows(WINDOW_LABEL_PATH):
         filename = row.get("filename")
-        if filename and filename not in filenames:
+        if filename and Path(filename).stem not in seen_stems and filename not in filenames:
             filenames.append(filename)
+            seen_stems.add(Path(filename).stem)
 
     return sorted(filenames, key=sample_sort_key)
 
 
 def source_video_path(filename: str) -> Path:
-    return VIDEO_DIR / filename
+    exact_path = VIDEO_DIR / filename
+    if exact_path.exists():
+        return exact_path
+
+    stem = Path(filename).stem
+    for extension in (".mp4", ".mov"):
+        candidate = VIDEO_DIR / f"{stem}{extension}"
+        if candidate.exists():
+            return candidate
+
+    return exact_path
 
 
-def rows_for_filename(filename: str) -> list[dict[str, str]]:
-    return [
-        row
-        for row in read_csv_rows(WINDOW_LABEL_PATH)
-        if row.get("filename") == filename
-    ]
+def label_filename_for(source_filename: str) -> str:
+    return f"{Path(source_filename).stem}.mp4"
 
 
 def has_valid_scores(row: dict[str, str]) -> bool:
-    return all(row.get(field["name"], "") in VALID_SCORES for field in sheets.LABEL_FIELDS)
+    return all(row.get(field["name"], "") in VALID_LABEL_VALUES for field in sheets.LABEL_FIELDS)
 
 
-def first_unlabelled_index(rows: list[dict[str, str]], start: int = 0) -> int:
-    for index in range(start, len(rows)):
-        if not has_valid_scores(rows[index]):
-            return index
-    return len(rows)
-
-
-def first_incomplete_filename(filenames: list[str]) -> str:
-    for filename in filenames:
-        rows = rows_for_filename(filename)
-        if not rows or first_unlabelled_index(rows) < len(rows):
-            return filename
-    return filenames[-1]
+def unlabelled_rows(filenames: list[str]) -> list[dict[str, str]]:
+    filename_set = {label_filename_for(filename) for filename in filenames}
+    return [
+        row
+        for row in read_csv_rows(WINDOW_LABEL_PATH)
+        if row.get("filename") in filename_set and not has_valid_scores(row)
+    ]
 
 
 def get_video_metadata(filename: str) -> tuple[float, float, int]:
@@ -142,6 +145,7 @@ def build_dataset_rows_for_video(
     step_size: float,
 ) -> list[dict[str, str]]:
     duration, fps, _ = get_video_metadata(filename)
+    label_filename = label_filename_for(filename)
     rows = []
     window_start = 0.0
 
@@ -150,14 +154,13 @@ def build_dataset_rows_for_video(
         if window_end <= window_start:
             break
 
-        clip_id = sheets.clip_id_for(filename, f"{window_start:.2f}", f"{window_end:.2f}")
-        clip_path = CLIP_ROOT / Path(filename).stem / f"{clip_id}.mp4"
+        clip_id = sheets.clip_id_for(label_filename, f"{window_start:.2f}", f"{window_end:.2f}")
         window_duration = window_end - window_start
         row = {
             "clip_id": clip_id,
-            "filename": filename,
+            "filename": label_filename,
             "source_csv": "",
-            "clip_path": sheets.relative_path(clip_path),
+            "clip_path": "",
             "window_start": str(round(window_start, 2)),
             "window_end": str(round(window_end, 2)),
             "window_duration": str(round(window_duration, 2)),
@@ -176,7 +179,7 @@ def build_dataset_rows_for_video(
 
 def row_key(row: dict[str, str]) -> tuple[str, str, str]:
     return (
-        row.get("filename", ""),
+        label_filename_for(row.get("filename", "")),
         row.get("window_start", ""),
         row.get("window_end", ""),
     )
@@ -186,8 +189,13 @@ def ensure_label_rows(filename: str, window_size: float, step_size: float) -> li
     existing_rows = [sheets.normalise_existing_row(row) for row in read_csv_rows(WINDOW_LABEL_PATH)]
     existing_by_key = {row_key(row): row for row in existing_rows}
     generated_rows = build_dataset_rows_for_video(filename, window_size, step_size)
+    label_filename = label_filename_for(filename)
 
-    merged_rows = [row for row in existing_rows if row.get("filename") != filename]
+    merged_rows = [
+        row
+        for row in existing_rows
+        if label_filename_for(row.get("filename", "")) != label_filename
+    ]
     fixed_columns = {
         "clip_id",
         "filename",
@@ -214,17 +222,18 @@ def ensure_label_rows(filename: str, window_size: float, step_size: float) -> li
 
 def ensure_video_label_row(filename: str) -> None:
     duration, _, _ = get_video_metadata(filename)
+    label_filename = label_filename_for(filename)
     rows = [sheets.normalise_existing_row(row) for row in read_csv_rows(VIDEO_LABEL_PATH)]
     existing = None
     remaining_rows = []
     for row in rows:
-        if row.get("filename") == filename:
+        if label_filename_for(row.get("filename", "")) == label_filename:
             existing = row
         else:
             remaining_rows.append(row)
 
     row = {
-        "filename": filename,
+        "filename": label_filename,
         "source_csv": "",
         "duration_seconds": str(round(duration, 2)),
         "duration_label": format_duration(duration),
@@ -242,122 +251,48 @@ def ensure_video_label_row(filename: str) -> None:
     write_csv_rows(VIDEO_LABEL_PATH, remaining_rows + [row], sheets.VIDEO_LABEL_COLUMNS)
 
 
-def clip_can_open(clip_path: Path) -> bool:
-    if not clip_path.exists() or clip_path.stat().st_size <= 1024:
-        return False
-
-    cap = cv2.VideoCapture(str(clip_path))
-    if not cap.isOpened():
-        cap.release()
-        return False
-
-    ok, _ = cap.read()
-    cap.release()
-    return bool(ok)
-
-
-def export_window_clips(filename: str, rows: list[dict[str, str]]) -> int:
-    video_path = source_video_path(filename)
-    if not video_path.exists():
-        raise FileNotFoundError(f"Video file not found: {video_path}")
-
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video file: {video_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    if width <= 0 or height <= 0:
-        cap.release()
-        raise RuntimeError(f"Cannot read video dimensions: {video_path}")
-
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    created_count = 0
-
-    try:
-        for row in rows:
-            clip_path = PROJECT_ROOT / row["clip_path"]
-            if clip_can_open(clip_path):
-                continue
-
-            clip_path.parent.mkdir(parents=True, exist_ok=True)
-            start = float(row["window_start"])
-            end = float(row["window_end"])
-            start_frame = max(0, int(round(start * fps)))
-            end_frame = max(start_frame + 1, int(round(end * fps)))
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-            temp_path = clip_path.with_suffix(".tmp.mp4")
-            temp_path.unlink(missing_ok=True)
-
-            writer = cv2.VideoWriter(str(temp_path), fourcc, fps, (width, height))
-            if not writer.isOpened():
-                raise RuntimeError(f"Cannot create clip file: {temp_path}")
-
-            while cap.get(cv2.CAP_PROP_POS_FRAMES) < end_frame:
-                ok, frame = cap.read()
-                if not ok:
-                    break
-
-                if frame.shape[1] != width or frame.shape[0] != height:
-                    frame = cv2.resize(frame, (width, height))
-                writer.write(frame)
-
-            writer.release()
-
-            if not clip_can_open(temp_path):
-                temp_path.unlink(missing_ok=True)
-                clip_path.unlink(missing_ok=True)
-                raise RuntimeError(f"Generated clip is not readable: {clip_path}")
-
-            clip_path.unlink(missing_ok=True)
-            temp_path.rename(clip_path)
-            created_count += 1
-    finally:
-        cap.release()
-
-    return created_count
-
-
-def ensure_current_clip(row: dict[str, str]) -> bool:
-    clip_path = PROJECT_ROOT / row["clip_path"]
-    if clip_can_open(clip_path):
-        return True
-
-    export_window_clips(row["filename"], [row])
-    return clip_can_open(clip_path)
-
-
 class WindowLabeler:
-    def __init__(self, root: tk.Tk, filename: str, window_size: float, step_size: float):
+    def __init__(
+        self,
+        root: tk.Tk,
+        filenames: list[str],
+        window_size: float,
+        step_size: float,
+        sample_limit: int | None,
+    ):
         self.root = root
         self.window_size = window_size
         self.step_size = step_size
-        self.filename = filename
+        self.sample_limit = sample_limit
+        self.filenames = filenames
+        self.filename = filenames[0] if filenames else ""
         self.rows: list[dict[str, str]] = []
         self.all_rows: list[dict[str, str]] = []
         self.index = 0
         self.cap: cv2.VideoCapture | None = None
+        self.playback_end_frame: int | None = None
         self.after_id: str | None = None
         self.frame_image = None
 
-        self.score_vars = {field["name"]: tk.StringVar() for field in sheets.LABEL_FIELDS}
+        self.label_vars = {field["name"]: tk.BooleanVar(value=False) for field in sheets.LABEL_FIELDS}
         self.quality_var = tk.StringVar(value="clear")
         self.notes_text: tk.Text | None = None
 
         self.build_ui()
-        self.load_video(filename)
+        self.load_random_queue()
         self.load_current_window()
 
-    def load_video(self, filename: str) -> None:
-        self.filename = filename
-        ensure_label_rows(filename, self.window_size, self.step_size)
-        self.rows = rows_for_filename(filename)
+    def load_random_queue(self) -> None:
+        for filename in self.filenames:
+            ensure_label_rows(filename, self.window_size, self.step_size)
         self.all_rows = read_csv_rows(WINDOW_LABEL_PATH)
-        export_window_clips(filename, self.rows)
-        self.index = self.next_unlabelled_index(0)
-        self.root.title(f"Window Labeling - {self.filename}")
+        self.rows = unlabelled_rows(self.filenames)
+        random.shuffle(self.rows)
+        if self.sample_limit is not None:
+            self.rows = self.rows[:self.sample_limit]
+        self.index = 0
+        scope = self.filename if len(self.filenames) == 1 else f"{len(self.filenames)} videos"
+        self.root.title(f"Window Labeling - Random from {scope}")
 
     def build_ui(self) -> None:
         self.root.title(f"Window Labeling - {self.filename}")
@@ -436,14 +371,9 @@ class WindowLabeler:
                 wraplength=360,
                 foreground="#56657a",
             ).grid(row=0, column=0, sticky="w")
-            ttk.Spinbox(
+            ttk.Checkbutton(
                 field_frame,
-                from_=1,
-                to=5,
-                width=5,
-                textvariable=self.score_vars[field["name"]],
-                validate="key",
-                validatecommand=(self.root.register(self.validate_score), "%P"),
+                variable=self.label_vars[field["name"]],
             ).grid(row=0, column=1, sticky="e", padx=(8, 0))
             row_index += 1
 
@@ -466,60 +396,49 @@ class WindowLabeler:
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.bind("<space>", self.replay_from_key)
-
-    @staticmethod
-    def validate_score(value: str) -> bool:
-        return value == "" or value in VALID_SCORES
-
-    def next_unlabelled_index(self, start: int) -> int:
-        return first_unlabelled_index(self.rows, start)
-
-    def load_next_incomplete_video(self) -> bool:
-        filenames = available_filenames()
-        try:
-            current_position = filenames.index(self.filename)
-        except ValueError:
-            current_position = -1
-
-        ordered_candidates = filenames[current_position + 1:] + filenames[:current_position + 1]
-        for filename in ordered_candidates:
-            ensure_label_rows(filename, self.window_size, self.step_size)
-            rows = rows_for_filename(filename)
-            if rows and first_unlabelled_index(rows) < len(rows):
-                self.load_video(filename)
-                return True
-        return False
+        self.root.bind("<Return>", self.submit_from_key)
 
     def load_current_window(self) -> None:
         self.stop_video()
 
         if self.index >= len(self.rows):
-            if self.load_next_incomplete_video():
-                self.load_current_window()
-                return
-            self.progress_label.config(text="All videos completed")
-            self.time_label.config(text="All windows completed")
-            self.status_label.config(text="All sample_vid windows are labelled.")
-            self.video_label.config(image="", text="All windows completed", fg="white")
+            remaining_rows = unlabelled_rows(self.filenames)
+            if remaining_rows:
+                self.progress_label.config(text="Session queue completed")
+                self.time_label.config(text="Restart to reshuffle remaining windows")
+                self.status_label.config(text="This random queue is finished. Reopen the tool for a fresh order.")
+                self.video_label.config(image="", text="Session queue completed", fg="white")
+            else:
+                self.progress_label.config(text="All videos completed")
+                self.time_label.config(text="All windows completed")
+                self.status_label.config(text="All sample_vid windows are labelled.")
+                self.video_label.config(image="", text="All windows completed", fg="white")
             return
 
         row = self.rows[self.index]
-        self.progress_label.config(text=f"{self.filename} | Window {self.index + 1} / {len(self.rows)}")
+        self.filename = row["filename"]
+        self.progress_label.config(
+            text=f"{row['filename']} | Random window {self.index + 1} / {len(self.rows)}"
+        )
         self.time_label.config(text=f"{row['window_start']}s - {row['window_end']}s")
 
         for field in sheets.LABEL_FIELDS:
-            self.score_vars[field["name"]].set(row.get(field["name"], ""))
+            self.label_vars[field["name"]].set(row.get(field["name"], "") == "Y")
         self.quality_var.set(row.get("annotation_quality") or "clear")
 
         assert self.notes_text is not None
         self.notes_text.delete("1.0", tk.END)
         self.notes_text.insert("1.0", row.get("notes", ""))
 
-        self.status_label.config(text="Score 1-5. Space = replay current window.")
+        self.status_label.config(text="Tick observed behaviours. Space = replay. Enter = submit.")
         self.replay()
 
     def replay_from_key(self, event=None) -> str:
         self.replay()
+        return "break"
+
+    def submit_from_key(self, event=None) -> str:
+        self.submit()
         return "break"
 
     def replay(self) -> None:
@@ -528,23 +447,29 @@ class WindowLabeler:
             return
 
         row = self.rows[self.index]
-        clip_path = PROJECT_ROOT / row["clip_path"]
-        try:
-            ensure_current_clip(row)
-        except Exception as exc:
-            messagebox.showerror("Video Error", f"Cannot prepare clip:\n{clip_path}\n\n{exc}")
-            return
-
-        self.cap = cv2.VideoCapture(str(clip_path))
+        video_path = source_video_path(row["filename"])
+        self.cap = cv2.VideoCapture(str(video_path))
         if not self.cap.isOpened():
-            messagebox.showerror("Video Error", f"Cannot open clip:\n{clip_path}")
+            messagebox.showerror("Video Error", f"Cannot open video:\n{video_path}")
             return
 
+        fps = self.cap.get(cv2.CAP_PROP_FPS) or 25
+        start = float(row["window_start"])
+        end = float(row["window_end"])
+        start_frame = max(0, int(round(start * fps)))
+        self.playback_end_frame = max(start_frame + 1, int(round(end * fps)))
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         self.show_next_frame()
 
     def show_next_frame(self) -> None:
         if self.cap is None:
             return
+
+        if self.playback_end_frame is not None:
+            current_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+            if current_frame >= self.playback_end_frame:
+                self.stop_video()
+                return
 
         ok, frame = self.cap.read()
         if not ok:
@@ -574,6 +499,7 @@ class WindowLabeler:
         if self.cap is not None:
             self.cap.release()
             self.cap = None
+        self.playback_end_frame = None
 
     def skip(self) -> None:
         self.index = min(self.index + 1, len(self.rows))
@@ -592,13 +518,9 @@ class WindowLabeler:
         if self.index >= len(self.rows):
             return
 
-        scores = {}
+        labels = {}
         for field in sheets.LABEL_FIELDS:
-            value = self.score_vars[field["name"]].get()
-            if value not in VALID_SCORES:
-                messagebox.showwarning("Missing Score", f"Please fill {field['label']} with 1-5.")
-                return
-            scores[field["name"]] = value
+            labels[field["name"]] = "Y" if self.label_vars[field["name"]].get() else "N"
 
         row = self.rows[self.index]
         target_key = row_key(row)
@@ -608,7 +530,7 @@ class WindowLabeler:
             if row_key(all_row) != target_key:
                 continue
 
-            for field_name, value in scores.items():
+            for field_name, value in labels.items():
                 all_row[field_name] = value
                 row[field_name] = value
             all_row["annotation_quality"] = self.quality_var.get()
@@ -619,7 +541,7 @@ class WindowLabeler:
 
         write_csv_rows(WINDOW_LABEL_PATH, self.all_rows, sheets.WINDOW_LABEL_COLUMNS)
         self.status_label.config(text=f"Saved window {self.index + 1}.")
-        self.index = self.next_unlabelled_index(self.index + 1)
+        self.index += 1
         self.load_current_window()
 
     def close(self) -> None:
@@ -627,46 +549,59 @@ class WindowLabeler:
         self.root.destroy()
 
 
-def choose_filename(args_filename: str | None) -> str:
+def choose_filenames(args_filename: str | None) -> list[str]:
     filenames = available_filenames()
     if not filenames:
         raise RuntimeError("No videos found in sample_vid. Add a video first.")
 
     if args_filename:
-        if args_filename not in filenames:
-            raise RuntimeError(f"{args_filename} was not found in sample_vid.")
-        return args_filename
+        if args_filename in filenames:
+            return [args_filename]
 
-    return first_incomplete_filename(filenames)
+        matching_filename = next(
+            (filename for filename in filenames if Path(filename).stem == Path(args_filename).stem),
+            None,
+        )
+        if matching_filename is None:
+            raise RuntimeError(f"{args_filename} was not found in sample_vid.")
+        return [matching_filename]
+
+    return filenames
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Open the desktop window labelling tool.")
-    parser.add_argument("--filename", help="Video filename to label, for example sample1.mov.")
+    parser.add_argument("--filename", help="Video filename to label, for example sample1.mp4.")
     parser.add_argument("--window-size", type=float, default=DEFAULT_WINDOW_SIZE)
     parser.add_argument("--step-size", type=float, default=DEFAULT_STEP_SIZE)
+    parser.add_argument("--limit", type=int, help="Maximum number of random windows to label in this session.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     try:
-        filename = choose_filename(args.filename)
+        filenames = choose_filenames(args.filename)
         if args.window_size <= 0 or args.step_size <= 0:
             raise RuntimeError("--window-size and --step-size must be positive.")
-        ensure_label_rows(filename, args.window_size, args.step_size)
-        rows = rows_for_filename(filename)
-        if not rows:
-            raise RuntimeError(f"No window rows found for {filename}.")
+        if args.limit is not None and args.limit <= 0:
+            raise RuntimeError("--limit must be positive when provided.")
+        for filename in filenames:
+            ensure_label_rows(filename, args.window_size, args.step_size)
 
-        created_count = export_window_clips(filename, rows)
-        print(f"Prepared {len(rows)} windows for {filename}. Created {created_count} new clips.")
+        rows = unlabelled_rows(filenames)
+        if not rows:
+            raise RuntimeError("No unlabelled window rows found.")
+
+        scope = filenames[0] if len(filenames) == 1 else f"{len(filenames)} videos"
+        session_count = min(len(rows), args.limit) if args.limit is not None else len(rows)
+        print(f"Prepared {session_count} random windows from {len(rows)} unlabelled windows in {scope}.")
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     root = tk.Tk()
-    WindowLabeler(root, filename, args.window_size, args.step_size)
+    WindowLabeler(root, filenames, args.window_size, args.step_size, args.limit)
     root.mainloop()
 
 
