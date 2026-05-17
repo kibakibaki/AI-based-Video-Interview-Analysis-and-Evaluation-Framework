@@ -143,14 +143,13 @@ This labelling step is for dataset creation and model training data. It is not p
 To generate window-level visual features for videos in `sample_vid/`:
 
 ```bash
-source backend/venv311/bin/activate
-python tools/analyse_sample_videos.py
+./run_analysis_features.sh
 ```
 
 To analyse one video:
 
 ```bash
-python tools/analyse_sample_videos.py --filename sample1.mp4
+./run_analysis_features.sh --filename sample1.mp4
 ```
 
 The script writes:
@@ -161,6 +160,8 @@ data/output/sample1_windows.csv
 ```
 
 `*_windows.csv` contains the automatic 3 second window features used as model input `X`. These rows align with `data/labels/manual_window_labels.csv`.
+
+For both training and future prediction, videos are not physically cut into 3 second video files. The analyser reads the original video, groups observations into 3 second windows in memory, and writes only tabular feature rows to CSV.
 
 ## Switch Camera Or Video Analysis
 
