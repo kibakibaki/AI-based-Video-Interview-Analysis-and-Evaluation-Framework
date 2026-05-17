@@ -116,7 +116,7 @@ class VisualFeatureTracker:
             "gaze_vertical_ratio_std": self._rounded_std(self.vertical_gaze_ratios),
         }
 
-    def window_features(self, total_duration, window_size=5.0, step_size=1.0):
+    def window_features(self, total_duration, window_size=3.0, step_size=3.0):
         if total_duration <= 0 or not self.observations:
             return []
 
