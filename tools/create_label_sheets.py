@@ -26,16 +26,17 @@ DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "output"
 DEFAULT_LABEL_DIR = PROJECT_ROOT / "data" / "labels"
 DEFAULT_CLIP_ROOT = PROJECT_ROOT / "data" / "window_clips"
 
+LOOK_AWAY_LEVEL_COLUMN = "look_away_level"
+LOOK_AWAY_LEVEL_VALUES = {"0", "1", "2", "U"}
+TRAINABLE_LOOK_AWAY_LEVEL_VALUES = {"0", "1", "2"}
+LEGACY_SEVERITY_COLUMN = "look_away_severity"
+LEGACY_LOOK_AWAY_COLUMNS = ["looking_away", "frequent_looking_away"]
+
 LABEL_FIELDS = [
     {
         "name": "face_not_visible",
         "label": "Face Not Visible",
         "hint": "Y if the face is missing, blocked, or too unclear to judge.",
-    },
-    {
-        "name": "frequent_looking_away",
-        "label": "Frequent Looking Away",
-        "hint": "Y if the candidate repeatedly looks away from the camera.",
     },
     {
         "name": "excessive_head_movement",
@@ -95,6 +96,7 @@ VIDEO_LABEL_COLUMNS = [
     "duration_seconds",
     "duration_label",
     "overall_score",
+    *LEGACY_LOOK_AWAY_COLUMNS,
     *[field["name"] for field in LABEL_FIELDS],
     "annotation_quality",
     "notes",
@@ -108,6 +110,9 @@ WINDOW_LABEL_COLUMNS = [
     "window_start",
     "window_end",
     "window_duration",
+    "is_labeled",
+    LOOK_AWAY_LEVEL_COLUMN,
+    *LEGACY_LOOK_AWAY_COLUMNS,
     *[field["name"] for field in LABEL_FIELDS],
     "annotation_quality",
     "notes",
@@ -151,6 +156,23 @@ def write_csv_rows(path: Path, rows: list[dict[str, str]], columns: list[str]) -
 
 def normalise_existing_row(row: dict[str, str]) -> dict[str, str]:
     normalised = dict(row)
+    if not normalised.get(LOOK_AWAY_LEVEL_COLUMN):
+        legacy_looking_away = normalised.get("looking_away", "")
+        legacy_frequent = normalised.get("frequent_looking_away", "")
+        legacy_severity = normalised.get(LEGACY_SEVERITY_COLUMN, "")
+
+        if legacy_frequent == "Y":
+            normalised[LOOK_AWAY_LEVEL_COLUMN] = "2"
+        elif legacy_looking_away == "Y":
+            normalised[LOOK_AWAY_LEVEL_COLUMN] = "1"
+        elif legacy_looking_away == "N" and legacy_frequent == "N":
+            normalised[LOOK_AWAY_LEVEL_COLUMN] = "0"
+        elif legacy_severity == "U":
+            normalised[LOOK_AWAY_LEVEL_COLUMN] = "U"
+        elif legacy_severity == "2":
+            normalised[LOOK_AWAY_LEVEL_COLUMN] = "1"
+        elif legacy_severity == "0":
+            normalised[LOOK_AWAY_LEVEL_COLUMN] = "0"
     for old_column, new_column in LEGACY_COLUMN_ALIASES.items():
         if not normalised.get(new_column) and normalised.get(old_column):
             normalised[new_column] = normalised[old_column]

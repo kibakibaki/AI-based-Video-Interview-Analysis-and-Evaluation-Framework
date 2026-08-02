@@ -94,7 +94,7 @@ Upload an MP4 or MOV video. The backend validates the video, runs gaze analysis,
 
 ## Run The Desktop Labelling Tool
 
-The labelling tool is independent from the upload website. Use it to prepare manually labelled training data from videos in `sample_vid/`. It creates its own sliding windows and does not require the main app to analyse the video first.
+The labelling tool is independent from the upload website. Use it to prepare aligned training data from videos in `sample_vid/`. By default, it first generates automatic 3 second window features, then opens the manual labelling window for the same videos and same window boundaries.
 
 From the project root:
 
@@ -102,7 +102,7 @@ From the project root:
 ./run_labeling_app.sh
 ```
 
-Without `--filename`, the tool randomly samples unlabelled windows across all videos in `sample_vid/`. Windows already saved in `data/labels/manual_window_labels.csv` are skipped, and each new run reshuffles the remaining unlabelled windows.
+Without `--filename`, the tool analyses and randomly samples unlabelled windows across all videos in `sample_vid/`. Windows already saved in `data/labels/manual_window_labels.csv` are skipped, and each new run reshuffles the remaining unlabelled windows.
 
 To label only a random subset in one session:
 
@@ -122,9 +122,21 @@ To label a specific video:
 ./run_labeling_app.sh --filename sample1.mp4
 ```
 
-With `--filename`, the tool randomly samples only the unlabelled windows from that video.
+With `--filename`, the tool first ensures automatic features exist for that video, then randomly samples only the unlabelled windows from that video.
 
-By default, the tool uses 3 second windows with a 3 second step, so windows do not overlap during manual labelling. You can change this for dataset creation:
+If automatic features already exist, they are reused. To regenerate them before manual labelling:
+
+```bash
+./run_labeling_app.sh --filename sample1.mp4 --force-auto-analysis
+```
+
+To continue manual labelling without running automatic analysis first:
+
+```bash
+./run_labeling_app.sh --skip-auto-analysis
+```
+
+By default, the tool uses 3 second windows with a 3 second step, so windows do not overlap during manual labelling and align with the automatic feature rows. If you change the manual window settings, pass `--skip-auto-analysis` because automatic feature extraction currently uses the default 3 second window setup:
 
 ```bash
 ./run_labeling_app.sh --filename sample1.mp4 --window-size 6 --step-size 6
@@ -136,6 +148,38 @@ The tool opens a desktop window, plays each window directly from the source vide
 data/labels/manual_window_labels.csv
 ```
 
+Look-away is labelled as an ordinal level:
+
+- `0` — no looking away
+- `1` — looking away
+- `2` — frequently looking away
+- `U` — unusable or impossible to judge
+
+The old window-level `looking_away` and `frequent_looking_away` columns are
+preserved for compatibility but are no longer edited by the labelling tool.
+Frequency should be calculated later across several consecutive windows rather
+than judged inside one 3 second window.
+
+Existing labels are migrated with `looking_away=Y -> 1`,
+`frequent_looking_away=Y -> 2`, and both fields set to N -> 0.
+Review those legacy mappings explicitly with:
+
+```bash
+./run_labeling_app.sh --skip-auto-analysis --relabel-legacy-look-away
+```
+
+Add `--limit 50` to review a smaller random batch.
+
+Use Space to replay the current window. Use Enter to submit the current window and move to the next one; Shift+Enter inserts a new line in notes.
+
+Automatic window features are stored separately:
+
+```text
+data/output/sample1_windows.csv
+```
+
+Both files use `filename`, `window_start`, and `window_end` so the automatic input features `X` and manual labels `Y` can be joined later for machine learning.
+
 This labelling step is for dataset creation and model training data. It is not part of the main interview analysis app.
 
 ## Generate Automatic Training Features
@@ -143,14 +187,13 @@ This labelling step is for dataset creation and model training data. It is not p
 To generate window-level visual features for videos in `sample_vid/`:
 
 ```bash
-source backend/venv311/bin/activate
-python tools/analyse_sample_videos.py
+./run_analysis_features.sh
 ```
 
 To analyse one video:
 
 ```bash
-python tools/analyse_sample_videos.py --filename sample1.mp4
+./run_analysis_features.sh --filename sample1.mp4
 ```
 
 The script writes:
@@ -161,6 +204,40 @@ data/output/sample1_windows.csv
 ```
 
 `*_windows.csv` contains the automatic 3 second window features used as model input `X`. These rows align with `data/labels/manual_window_labels.csv`.
+
+For both training and future prediction, videos are not physically cut into 3 second video files. The analyser reads the original video, groups observations into 3 second windows in memory, and writes only tabular feature rows to CSV.
+
+## Build The Training Dataset
+
+After automatic features and manual labels exist, merge them into one model-ready CSV:
+
+```bash
+./run_build_training_dataset.sh
+```
+
+This writes:
+
+```text
+data/training/window_training_dataset.csv
+```
+
+The merge uses `filename`, `window_start`, and `window_end` as the join key.
+Automatic feature columns become model input `X`. For binary look-away
+training, level `0` becomes `looking_away=0`, levels `1` and `2` become
+`looking_away=1`, and level `U` is excluded. The generated
+`frequent_looking_away` target is 1 only for level `2`. Other manual checkbox
+labels are converted from Y/N to 1/0.
+
+To run the model-training notebook, install the separate training dependencies:
+
+```bash
+source backend/venv311/bin/activate
+python -m pip install -r backend/requirements-training.txt
+jupyter notebook model_training/look_away_training.ipynb
+```
+
+The notebook predicts `look_away_level` as three separate classes: level 0,
+level 1, and level 2. Rows labelled `U` are not used for training.
 
 ## Switch Camera Or Video Analysis
 
@@ -236,6 +313,9 @@ Current visual features include:
 - head movement stability score
 - blink count and blink rate per minute
 - horizontal and vertical gaze ratio mean/std
+- primary gaze direction and primary gaze zone ratio
+- secondary gaze zone ratio
+- gaze/head deviation from the candidate's primary attention direction
 
 For each uploaded video, the backend writes two CSV files:
 

@@ -20,14 +20,17 @@ MAX_DURATION_SECONDS = 5 * 60
 
 # Change this variable to choose what happens when running this file directly.
 # "server" starts the upload website; "analysis" runs the local gaze analysis.
-APP_MODE = "server" #"analysis"
-
+APP_MODE = "analysis"
 # Change this variable to switch local analysis input.
-# Valid values: "camera" or "video".
-ANALYSIS_SOURCE = "video" #"camera"
+# Valid values: "camera", "single_camera", or "video".
+ANALYSIS_SOURCE = "camera"
 
 LOCAL_VIDEO_PATH = UPLOAD_DIR / "sample1.mp4"
-CAMERA_INDEX = 0
+
+# OpenCV camera indexes on macOS depend on the connected devices. Override with:
+# CAMERA_INDEX=2 ./run_app.sh
+CAMERA_INDEX = int(os.environ.get("CAMERA_INDEX", "1"))
+CAMERA_INDEX_CANDIDATES = [CAMERA_INDEX]
 
 app = Flask(__name__, static_folder=None)
 
@@ -160,6 +163,30 @@ def _build_analysis_response(filename, saved_path, duration):
 
 def run_local_analysis():
     if ANALYSIS_SOURCE == "camera":
+        last_error = None
+        for camera_index in CAMERA_INDEX_CANDIDATES:
+            try:
+                print(f"Trying camera {camera_index}...", flush=True)
+                return analyse_gaze(
+                    source_type="camera",
+                    camera_index=camera_index,
+                    yaw_threshold=25,
+                    pitch_threshold=20,
+                    use_eye_gaze=True,
+                    show_preview=True,
+                    enable_confidence_scoring=True,
+                )
+            except ValueError as exc:
+                last_error = exc
+                print(f"Camera {camera_index} unavailable: {exc}", flush=True)
+
+        raise RuntimeError(
+            "No camera could be opened. Check macOS Camera permissions for the "
+            "app running this command, close other camera apps, or update "
+            f"CAMERA_INDEX_CANDIDATES. Last error: {last_error}"
+        )
+
+    if ANALYSIS_SOURCE == "single_camera":
         return analyse_gaze(
             source_type="camera",
             camera_index=CAMERA_INDEX,
@@ -184,7 +211,7 @@ def run_local_analysis():
             enable_confidence_scoring=True,
         )
 
-    raise ValueError('ANALYSIS_SOURCE must be either "camera" or "video"')
+    raise ValueError('ANALYSIS_SOURCE must be "camera", "single_camera", or "video"')
 
 
 @app.get("/")

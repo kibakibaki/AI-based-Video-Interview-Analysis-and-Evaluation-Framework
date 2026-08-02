@@ -1,3 +1,5 @@
+import math
+from collections import Counter
 from dataclasses import dataclass, field
 from statistics import mean, pstdev
 
@@ -75,6 +77,7 @@ class VisualFeatureTracker:
             self.looking_away_segments.append((self.current_looking_away_start, total_duration))
             self.current_looking_away_start = None
 
+        attention_context = self._attention_context(self.observations)
         looking_away_durations = [
             end - start
             for start, end in self.looking_away_segments
@@ -114,12 +117,14 @@ class VisualFeatureTracker:
             "gaze_horizontal_ratio_std": self._rounded_std(self.horizontal_gaze_ratios),
             "gaze_vertical_ratio_mean": self._rounded_mean(self.vertical_gaze_ratios),
             "gaze_vertical_ratio_std": self._rounded_std(self.vertical_gaze_ratios),
+            **self._attention_features_for_observations(self.observations, attention_context),
         }
 
     def window_features(self, total_duration, window_size=3.0, step_size=3.0):
         if total_duration <= 0 or not self.observations:
             return []
 
+        attention_context = self._attention_context(self.observations)
         rows = []
         window_start = 0.0
         while window_start < total_duration:
@@ -137,6 +142,7 @@ class VisualFeatureTracker:
                     window_start,
                     window_end,
                     window_observations,
+                    attention_context,
                 ))
 
             if window_end >= total_duration:
@@ -170,7 +176,7 @@ class VisualFeatureTracker:
         )
 
     @classmethod
-    def _features_for_window(cls, window_start, window_end, observations):
+    def _features_for_window(cls, window_start, window_end, observations, attention_context):
         total_frames = len(observations)
         face_detected_frames = sum(1 for obs in observations if obs.face_detected)
         looking_at_camera_frames = sum(1 for obs in observations if obs.looking_at_camera)
@@ -221,7 +227,121 @@ class VisualFeatureTracker:
             "gaze_horizontal_ratio_std": cls._rounded_std(horizontal_ratios),
             "gaze_vertical_ratio_mean": cls._rounded_mean(vertical_ratios),
             "gaze_vertical_ratio_std": cls._rounded_std(vertical_ratios),
+            **cls._attention_features_for_observations(observations, attention_context),
         }
+
+    @classmethod
+    def _attention_context(cls, observations):
+        gaze_points = cls._gaze_points(observations)
+        head_points = cls._head_points(observations)
+
+        context = {
+            "primary_gaze_horizontal_ratio": None,
+            "primary_gaze_vertical_ratio": None,
+            "primary_gaze_zone_ratio": 0.0,
+            "secondary_gaze_zone_ratio": 0.0,
+            "primary_head_pitch": None,
+            "primary_head_yaw": None,
+        }
+
+        if gaze_points:
+            primary_bin, primary_count, secondary_count = cls._dominant_bin_counts(gaze_points, bin_size=0.12)
+            primary_points = [
+                point
+                for point in gaze_points
+                if cls._bin_point(point, 0.12) == primary_bin
+            ]
+            context["primary_gaze_horizontal_ratio"] = cls._rounded_mean([point[0] for point in primary_points])
+            context["primary_gaze_vertical_ratio"] = cls._rounded_mean([point[1] for point in primary_points])
+            context["primary_gaze_zone_ratio"] = cls._safe_ratio(primary_count, len(gaze_points))
+            context["secondary_gaze_zone_ratio"] = cls._safe_ratio(secondary_count, len(gaze_points))
+
+        if head_points:
+            primary_bin, _, _ = cls._dominant_bin_counts(head_points, bin_size=8.0)
+            primary_points = [
+                point
+                for point in head_points
+                if cls._bin_point(point, 8.0) == primary_bin
+            ]
+            context["primary_head_pitch"] = cls._rounded_mean([point[0] for point in primary_points])
+            context["primary_head_yaw"] = cls._rounded_mean([point[1] for point in primary_points])
+
+        return context
+
+    @classmethod
+    def _attention_features_for_observations(cls, observations, attention_context):
+        gaze_points = cls._gaze_points(observations)
+        head_points = cls._head_points(observations)
+
+        primary_gaze = (
+            attention_context.get("primary_gaze_horizontal_ratio"),
+            attention_context.get("primary_gaze_vertical_ratio"),
+        )
+        gaze_distances = cls._distances_from_primary(gaze_points, primary_gaze)
+
+        primary_head = (
+            attention_context.get("primary_head_pitch"),
+            attention_context.get("primary_head_yaw"),
+        )
+        head_distances = cls._distances_from_primary(head_points, primary_head)
+
+        return {
+            "primary_gaze_horizontal_ratio": attention_context.get("primary_gaze_horizontal_ratio"),
+            "primary_gaze_vertical_ratio": attention_context.get("primary_gaze_vertical_ratio"),
+            "primary_gaze_zone_ratio": attention_context.get("primary_gaze_zone_ratio", 0.0),
+            "secondary_gaze_zone_ratio": attention_context.get("secondary_gaze_zone_ratio", 0.0),
+            "gaze_deviation_from_primary_ratio": cls._ratio_over_threshold(gaze_distances, 0.18),
+            "gaze_deviation_from_primary_mean": cls._rounded_mean(gaze_distances),
+            "primary_head_pitch": attention_context.get("primary_head_pitch"),
+            "primary_head_yaw": attention_context.get("primary_head_yaw"),
+            "head_deviation_from_primary_ratio": cls._ratio_over_threshold(head_distances, 12.0),
+            "head_deviation_from_primary_mean": cls._rounded_mean(head_distances),
+        }
+
+    @staticmethod
+    def _gaze_points(observations):
+        return [
+            (obs.horizontal_ratio, obs.vertical_ratio)
+            for obs in observations
+            if obs.horizontal_ratio is not None and obs.vertical_ratio is not None
+        ]
+
+    @staticmethod
+    def _head_points(observations):
+        return [
+            (obs.pitch, obs.yaw)
+            for obs in observations
+            if obs.pitch is not None and obs.yaw is not None
+        ]
+
+    @staticmethod
+    def _bin_point(point, bin_size):
+        return tuple(round(value / bin_size) for value in point)
+
+    @classmethod
+    def _dominant_bin_counts(cls, points, bin_size):
+        counts = Counter(cls._bin_point(point, bin_size) for point in points)
+        most_common = counts.most_common(2)
+        primary_bin, primary_count = most_common[0]
+        secondary_count = most_common[1][1] if len(most_common) > 1 else 0
+        return primary_bin, primary_count, secondary_count
+
+    @staticmethod
+    def _distances_from_primary(points, primary_point):
+        if not points or primary_point[0] is None or primary_point[1] is None:
+            return []
+
+        primary_x, primary_y = primary_point
+        return [
+            math.sqrt((point[0] - primary_x) ** 2 + (point[1] - primary_y) ** 2)
+            for point in points
+        ]
+
+    @classmethod
+    def _ratio_over_threshold(cls, values, threshold):
+        if not values:
+            return 0.0
+        return cls._safe_ratio(sum(1 for value in values if value > threshold), len(values))
 
     def _update_looking_away_segments(self, current_time, looking_at_camera):
         if looking_at_camera:

@@ -33,11 +33,13 @@ except ModuleNotFoundError as exc:
 import cv2
 from PIL import Image, ImageTk
 
+import analyse_sample_videos as automatic_features
 import create_label_sheets as sheets
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VIDEO_DIR = PROJECT_ROOT / "sample_vid"
+OUTPUT_DIR = PROJECT_ROOT / "data" / "output"
 LABEL_DIR = PROJECT_ROOT / "data" / "labels"
 WINDOW_LABEL_PATH = LABEL_DIR / "manual_window_labels.csv"
 VIDEO_LABEL_PATH = LABEL_DIR / "manual_video_labels.csv"
@@ -46,6 +48,13 @@ VIDEO_CANVAS_SIZE = (720, 405)
 DEFAULT_WINDOW_SIZE = 3.0
 DEFAULT_STEP_SIZE = 3.0
 VALID_LABEL_VALUES = {"Y", "N"}
+LABELLED_VALUE = "Y"
+LOOK_AWAY_LEVEL_OPTIONS = [
+    ("0", "0 — No looking away"),
+    ("1", "1 — Looking away"),
+    ("2", "2 — Frequently looking away"),
+    ("U", "U — Unusable / cannot judge"),
+]
 
 
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -101,7 +110,42 @@ def label_filename_for(source_filename: str) -> str:
 
 
 def has_valid_scores(row: dict[str, str]) -> bool:
-    return all(row.get(field["name"], "") in VALID_LABEL_VALUES for field in sheets.LABEL_FIELDS)
+    return (
+        row.get(sheets.LOOK_AWAY_LEVEL_COLUMN, "") in sheets.LOOK_AWAY_LEVEL_VALUES
+        and all(row.get(field["name"], "") in VALID_LABEL_VALUES for field in sheets.LABEL_FIELDS)
+    )
+
+
+def is_labelled(row: dict[str, str]) -> bool:
+    return has_valid_scores(row)
+
+
+def label_progress(filenames: list[str]) -> tuple[int, int, float]:
+    filename_set = {label_filename_for(filename) for filename in filenames}
+    rows = [
+        row
+        for row in read_csv_rows(WINDOW_LABEL_PATH)
+        if row.get("filename") in filename_set
+    ]
+    completed = sum(1 for row in rows if is_labelled(row))
+    total = len(rows)
+    percent = (completed / total * 100) if total else 0.0
+    return completed, total, percent
+
+
+def backfill_labelled_flags(filenames: list[str]) -> None:
+    filename_set = {label_filename_for(filename) for filename in filenames}
+    rows = read_csv_rows(WINDOW_LABEL_PATH)
+    changed = False
+    for row in rows:
+        if row.get("filename") not in filename_set:
+            continue
+        if not row.get("is_labeled") and has_valid_scores(row):
+            row["is_labeled"] = LABELLED_VALUE
+            changed = True
+
+    if changed:
+        write_csv_rows(WINDOW_LABEL_PATH, rows, sheets.WINDOW_LABEL_COLUMNS)
 
 
 def unlabelled_rows(filenames: list[str]) -> list[dict[str, str]]:
@@ -109,7 +153,20 @@ def unlabelled_rows(filenames: list[str]) -> list[dict[str, str]]:
     return [
         row
         for row in read_csv_rows(WINDOW_LABEL_PATH)
-        if row.get("filename") in filename_set and not has_valid_scores(row)
+        if row.get("filename") in filename_set and not is_labelled(row)
+    ]
+
+
+def legacy_look_away_rows(filenames: list[str]) -> list[dict[str, str]]:
+    filename_set = {label_filename_for(filename) for filename in filenames}
+    return [
+        row
+        for row in read_csv_rows(WINDOW_LABEL_PATH)
+        if row.get("filename") in filename_set
+        and (
+            row.get("looking_away", "") in VALID_LABEL_VALUES
+            or row.get("frequent_looking_away", "") in VALID_LABEL_VALUES
+        )
     ]
 
 
@@ -259,11 +316,13 @@ class WindowLabeler:
         window_size: float,
         step_size: float,
         sample_limit: int | None,
+        relabel_legacy_look_away: bool,
     ):
         self.root = root
         self.window_size = window_size
         self.step_size = step_size
         self.sample_limit = sample_limit
+        self.relabel_legacy_look_away = relabel_legacy_look_away
         self.filenames = filenames
         self.filename = filenames[0] if filenames else ""
         self.rows: list[dict[str, str]] = []
@@ -275,6 +334,8 @@ class WindowLabeler:
         self.frame_image = None
 
         self.label_vars = {field["name"]: tk.BooleanVar(value=False) for field in sheets.LABEL_FIELDS}
+        self.look_away_level_var = tk.StringVar(value="")
+        self.labeled_var = tk.BooleanVar(value=True)
         self.quality_var = tk.StringVar(value="clear")
         self.notes_text: tk.Text | None = None
 
@@ -286,7 +347,10 @@ class WindowLabeler:
         for filename in self.filenames:
             ensure_label_rows(filename, self.window_size, self.step_size)
         self.all_rows = read_csv_rows(WINDOW_LABEL_PATH)
-        self.rows = unlabelled_rows(self.filenames)
+        if self.relabel_legacy_look_away:
+            self.rows = legacy_look_away_rows(self.filenames)
+        else:
+            self.rows = unlabelled_rows(self.filenames)
         random.shuffle(self.rows)
         if self.sample_limit is not None:
             self.rows = self.rows[:self.sample_limit]
@@ -331,16 +395,22 @@ class WindowLabeler:
 
         controls = ttk.Frame(video_frame)
         controls.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        controls.columnconfigure((0, 1), weight=1)
+        controls.columnconfigure((0, 1, 2), weight=1)
         ttk.Button(controls, text="Previous Window", command=self.previous_window).grid(
             row=0,
             column=0,
             sticky="ew",
             padx=(0, 6),
         )
-        ttk.Button(controls, text="Skip", command=self.skip).grid(
+        ttk.Button(controls, text="Replay", command=self.replay).grid(
             row=0,
             column=1,
+            sticky="ew",
+            padx=6,
+        )
+        ttk.Button(controls, text="Skip", command=self.skip).grid(
+            row=0,
+            column=2,
             sticky="ew",
             padx=(6, 0),
         )
@@ -349,15 +419,45 @@ class WindowLabeler:
         form.grid(row=1, column=1, sticky="nsew")
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text="Quality").grid(row=0, column=0, sticky="w", pady=(0, 12))
+        ttk.Label(form, text="Label").grid(row=0, column=0, sticky="w", pady=(0, 12))
+        ttk.Checkbutton(
+            form,
+            text="Reviewed",
+            variable=self.labeled_var,
+        ).grid(row=0, column=1, sticky="w", pady=(0, 12))
+
+        ttk.Label(form, text="Quality").grid(row=1, column=0, sticky="w", pady=(0, 12))
         ttk.Combobox(
             form,
             textvariable=self.quality_var,
             values=("clear", "unclear", "invalid"),
             state="readonly",
-        ).grid(row=0, column=1, sticky="ew", pady=(0, 12))
+        ).grid(row=1, column=1, sticky="ew", pady=(0, 12))
 
-        row_index = 1
+        row_index = 2
+        ttk.Label(form, text="Look-away level").grid(
+            row=row_index, column=0, sticky="nw", pady=4
+        )
+        level_frame = ttk.Frame(form)
+        level_frame.grid(row=row_index, column=1, sticky="ew", pady=4)
+        ttk.Label(
+            level_frame,
+            text=(
+                "Use 0 for no looking away, 1 for looking away, "
+                "2 for frequently looking away, and U when the clip cannot be judged."
+            ),
+            wraplength=360,
+            foreground="#56657a",
+        ).grid(row=0, column=0, sticky="w")
+        for option_index, (value, label) in enumerate(LOOK_AWAY_LEVEL_OPTIONS, 1):
+            ttk.Radiobutton(
+                level_frame,
+                text=label,
+                value=value,
+                variable=self.look_away_level_var,
+            ).grid(row=option_index, column=0, sticky="w", pady=(2, 0))
+        row_index += 1
+
         for field in sheets.LABEL_FIELDS:
             ttk.Label(form, text=field["label"]).grid(row=row_index, column=0, sticky="nw", pady=4)
 
@@ -379,6 +479,8 @@ class WindowLabeler:
 
         ttk.Label(form, text="Notes").grid(row=row_index, column=0, sticky="nw", pady=(12, 4))
         self.notes_text = tk.Text(form, height=4, wrap="word")
+        self.notes_text.bind("<Return>", self.submit_from_key)
+        self.notes_text.bind("<Shift-Return>", self.insert_notes_newline)
         self.notes_text.grid(row=row_index, column=1, sticky="ew", pady=(12, 4))
         row_index += 1
 
@@ -386,7 +488,7 @@ class WindowLabeler:
         self.status_label.grid(row=row_index, column=0, columnspan=2, sticky="w", pady=(8, 8))
         row_index += 1
 
-        ttk.Button(form, text="Submit & Next", command=self.submit).grid(
+        ttk.Button(form, text="Label & Next", command=self.submit).grid(
             row=row_index,
             column=0,
             columnspan=2,
@@ -395,8 +497,9 @@ class WindowLabeler:
         )
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
-        self.root.bind("<space>", self.replay_from_key)
         self.root.bind("<Return>", self.submit_from_key)
+        self.root.bind("<Shift-Return>", self.insert_notes_newline)
+        self.install_space_replay_bindings()
 
     def load_current_window(self) -> None:
         self.stop_video()
@@ -424,21 +527,48 @@ class WindowLabeler:
 
         for field in sheets.LABEL_FIELDS:
             self.label_vars[field["name"]].set(row.get(field["name"], "") == "Y")
+        self.look_away_level_var.set(
+            row.get(sheets.LOOK_AWAY_LEVEL_COLUMN, "")
+        )
+        self.labeled_var.set(True)
         self.quality_var.set(row.get("annotation_quality") or "clear")
 
         assert self.notes_text is not None
         self.notes_text.delete("1.0", tk.END)
         self.notes_text.insert("1.0", row.get("notes", ""))
 
-        self.status_label.config(text="Tick observed behaviours. Space = replay. Enter = submit.")
+        self.status_label.config(
+            text="Choose look-away level, tick other behaviours, then press Enter."
+        )
         self.replay()
+
+    def install_space_replay_bindings(self) -> None:
+        replay_tag = "ReplayOnlySpace"
+        self.root.bind_class(replay_tag, "<KeyPress-space>", self.replay_from_key)
+        self.root.bind_class(replay_tag, "<KeyRelease-space>", self.block_key)
+        self.prepend_bindtag(self.root, replay_tag)
+
+    def prepend_bindtag(self, widget: tk.Widget, tag: str) -> None:
+        bindtags = widget.bindtags()
+        if tag not in bindtags:
+            widget.bindtags((tag, *bindtags))
+        for child in widget.winfo_children():
+            self.prepend_bindtag(child, tag)
 
     def replay_from_key(self, event=None) -> str:
         self.replay()
         return "break"
 
+    def block_key(self, event=None) -> str:
+        return "break"
+
     def submit_from_key(self, event=None) -> str:
         self.submit()
+        return "break"
+
+    def insert_notes_newline(self, event=None) -> str:
+        if self.notes_text is not None and self.root.focus_get() is self.notes_text:
+            self.notes_text.insert(tk.INSERT, "\n")
         return "break"
 
     def replay(self) -> None:
@@ -518,6 +648,11 @@ class WindowLabeler:
         if self.index >= len(self.rows):
             return
 
+        level = self.look_away_level_var.get()
+        if level not in sheets.LOOK_AWAY_LEVEL_VALUES:
+            self.status_label.config(text="Choose look-away level 0, 1, 2, or U before saving.")
+            return
+
         labels = {}
         for field in sheets.LABEL_FIELDS:
             labels[field["name"]] = "Y" if self.label_vars[field["name"]].get() else "N"
@@ -533,8 +668,12 @@ class WindowLabeler:
             for field_name, value in labels.items():
                 all_row[field_name] = value
                 row[field_name] = value
+            all_row[sheets.LOOK_AWAY_LEVEL_COLUMN] = level
+            row[sheets.LOOK_AWAY_LEVEL_COLUMN] = level
+            all_row["is_labeled"] = LABELLED_VALUE if self.labeled_var.get() else ""
             all_row["annotation_quality"] = self.quality_var.get()
             all_row["notes"] = notes
+            row["is_labeled"] = all_row["is_labeled"]
             row["annotation_quality"] = self.quality_var.get()
             row["notes"] = notes
             break
@@ -569,12 +708,80 @@ def choose_filenames(args_filename: str | None) -> list[str]:
     return filenames
 
 
+def ensure_automatic_feature_rows(
+    filenames: list[str],
+    frame_stride: int,
+    force: bool,
+) -> list[str]:
+    ready_filenames = []
+    for index, filename in enumerate(filenames, 1):
+        video_path = source_video_path(filename)
+        if not video_path.exists():
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+
+        label_filename = label_filename_for(filename)
+        window_csv_path = OUTPUT_DIR / f"{Path(label_filename).stem}_windows.csv"
+        if window_csv_path.exists() and not force:
+            print(
+                f"[{index}/{len(filenames)}] Automatic features already exist: "
+                f"{window_csv_path.relative_to(PROJECT_ROOT)}"
+            )
+            ready_filenames.append(filename)
+            continue
+
+        print(
+            f"[{index}/{len(filenames)}] Running automatic analysis for "
+            f"{video_path.name} -> {label_filename}",
+            flush=True,
+        )
+        try:
+            summary_path, windows_path = automatic_features.analyse_video(video_path, frame_stride)
+        except Exception as exc:
+            print(f"  Automatic analysis failed for {video_path.name}: {exc}", file=sys.stderr)
+            if window_csv_path.exists():
+                print(f"  Keeping existing features: {window_csv_path.relative_to(PROJECT_ROOT)}")
+                ready_filenames.append(filename)
+            else:
+                print(f"  Skipping manual labelling for {video_path.name}; no automatic window features exist.")
+            continue
+
+        print(f"  Wrote {summary_path.relative_to(PROJECT_ROOT)}")
+        print(f"  Wrote {windows_path.relative_to(PROJECT_ROOT)}")
+        ready_filenames.append(filename)
+
+    return ready_filenames
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Open the desktop window labelling tool.")
     parser.add_argument("--filename", help="Video filename to label, for example sample1.mp4.")
     parser.add_argument("--window-size", type=float, default=DEFAULT_WINDOW_SIZE)
     parser.add_argument("--step-size", type=float, default=DEFAULT_STEP_SIZE)
     parser.add_argument("--limit", type=int, help="Maximum number of random windows to label in this session.")
+    parser.add_argument(
+        "--skip-auto-analysis",
+        action="store_true",
+        help="Open manual labelling without first generating automatic window features.",
+    )
+    parser.add_argument(
+        "--force-auto-analysis",
+        action="store_true",
+        help="Regenerate automatic window feature CSV files before manual labelling.",
+    )
+    parser.add_argument(
+        "--analysis-frame-stride",
+        type=int,
+        default=10,
+        help="Analyse one frame every N frames during automatic feature extraction.",
+    )
+    parser.add_argument(
+        "--relabel-legacy-look-away",
+        action="store_true",
+        help=(
+            "Review only windows that have an old Y/N looking_away label and "
+            "replace migrated legacy labels with an explicit 0/1/2/U level."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -586,23 +793,64 @@ def main() -> None:
             raise RuntimeError("--window-size and --step-size must be positive.")
         if args.limit is not None and args.limit <= 0:
             raise RuntimeError("--limit must be positive when provided.")
+        if args.analysis_frame_stride < 1:
+            raise RuntimeError("--analysis-frame-stride must be >= 1.")
+        if not args.skip_auto_analysis:
+            if args.window_size != DEFAULT_WINDOW_SIZE or args.step_size != DEFAULT_STEP_SIZE:
+                raise RuntimeError(
+                    "Automatic feature extraction currently uses 3 second windows with a 3 second step. "
+                    "Use the default labelling window settings, or pass --skip-auto-analysis."
+                )
+            filenames = ensure_automatic_feature_rows(
+                filenames,
+                frame_stride=args.analysis_frame_stride,
+                force=args.force_auto_analysis,
+            )
+            if not filenames:
+                raise RuntimeError("No videos have automatic window features available for manual labelling.")
         for filename in filenames:
             ensure_label_rows(filename, args.window_size, args.step_size)
+        backfill_labelled_flags(filenames)
 
-        rows = unlabelled_rows(filenames)
+        rows = (
+            legacy_look_away_rows(filenames)
+            if args.relabel_legacy_look_away
+            else unlabelled_rows(filenames)
+        )
         if not rows:
-            raise RuntimeError("No unlabelled window rows found.")
+            queue_name = "legacy look-away" if args.relabel_legacy_look_away else "unlabelled"
+            raise RuntimeError(f"No {queue_name} window rows found.")
 
         scope = filenames[0] if len(filenames) == 1 else f"{len(filenames)} videos"
         session_count = min(len(rows), args.limit) if args.limit is not None else len(rows)
+        starting_completed, _, _ = label_progress(filenames)
         print(f"Prepared {session_count} random windows from {len(rows)} unlabelled windows in {scope}.")
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     root = tk.Tk()
-    WindowLabeler(root, filenames, args.window_size, args.step_size, args.limit)
+    labeler = WindowLabeler(
+        root,
+        filenames,
+        args.window_size,
+        args.step_size,
+        args.limit,
+        args.relabel_legacy_look_away,
+    )
     root.mainloop()
+
+    completed, total, percent = label_progress(filenames)
+    session_completed = (
+        min(labeler.index, session_count)
+        if args.relabel_legacy_look_away
+        else max(0, completed - starting_completed)
+    )
+    print(
+        "Labeling progress: "
+        f"{completed}/{total} clips completed ({percent:.2f}%). "
+        f"This session: {session_completed}/{session_count}."
+    )
 
 
 if __name__ == "__main__":
