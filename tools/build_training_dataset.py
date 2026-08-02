@@ -62,7 +62,7 @@ def row_key(row: dict[str, str]) -> tuple[str, str, str]:
 def is_complete_label_row(row: dict[str, str]) -> bool:
     return (
         row.get(LEVEL_COLUMN, "") in sheets.TRAINABLE_LOOK_AWAY_LEVEL_VALUES
-        and all(row.get(column, "") in VALID_LABEL_VALUES for column in LABEL_COLUMNS)
+        and row.get("annotation_quality", "") == "clear"
     )
 
 
@@ -188,7 +188,7 @@ def main() -> None:
     if not label_rows:
         print(
             "No usable manual labels were found. The default build requires "
-            "look_away_level 0, 1, or 2 and complete Y/N labels."
+            "look_away_level 0, 1, or 2 with annotation_quality=clear."
         )
 
 
