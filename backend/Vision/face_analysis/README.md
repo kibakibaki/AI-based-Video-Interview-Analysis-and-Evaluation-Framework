@@ -14,7 +14,8 @@ from Vision import analyse_gaze
 
 - face visibility tracking
 - head pose estimation with pitch, yaw, and roll
-- camera-facing / looking-away segment detection
+- separate camera-facing and fixed primary-attention measurements
+- full-video-reference looking-away segment detection for offline videos
 - pupil gaze direction through GazeTracking
 - blink count and blink rate
 - eye-contact confidence scoring

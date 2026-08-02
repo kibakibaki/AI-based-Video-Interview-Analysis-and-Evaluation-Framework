@@ -68,6 +68,13 @@ class AttentionReferenceTracker:
         if self.samples < self.min_samples or not self.offset_bin_counts:
             return 0.0, 0.0
 
+        return self.dominant_reference_offset()
+
+    def dominant_reference_offset(self):
+        """Return the most common attention offset after all available samples."""
+        if not self.offset_bin_counts:
+            return 0.0, 0.0
+
         primary_bin, _ = self.offset_bin_counts.most_common(1)[0]
         return primary_bin[0] * self.bin_size, primary_bin[1] * self.bin_size
 
@@ -153,10 +160,88 @@ def _attention_offsets(pitch, yaw, yaw_threshold, pitch_threshold, gaze_observat
         gaze_horizontal_ratio = gaze_observation.horizontal_ratio
         gaze_vertical_ratio = gaze_observation.vertical_ratio
 
+    return _attention_offsets_from_ratios(
+        pitch,
+        yaw,
+        yaw_threshold,
+        pitch_threshold,
+        gaze_horizontal_ratio,
+        gaze_vertical_ratio,
+    )
+
+
+def _attention_offsets_from_ratios(
+    pitch,
+    yaw,
+    yaw_threshold,
+    pitch_threshold,
+    gaze_horizontal_ratio,
+    gaze_vertical_ratio,
+):
+    if pitch is None or yaw is None:
+        return None
+
     return (
         _combined_horizontal_attention_offset(yaw, yaw_threshold, gaze_horizontal_ratio),
         _combined_vertical_attention_offset(pitch, pitch_threshold, gaze_vertical_ratio),
     )
+
+
+def _fixed_primary_attention_states(
+    observations,
+    reference_horizontal,
+    reference_vertical,
+    yaw_threshold,
+    pitch_threshold,
+    center_limit=ATTENTION_CENTER_LIMIT,
+):
+    states = []
+    for observation in observations:
+        if not observation.face_detected:
+            states.append(False)
+            continue
+
+        offsets = _attention_offsets_from_ratios(
+            observation.pitch,
+            observation.yaw,
+            yaw_threshold,
+            pitch_threshold,
+            observation.horizontal_ratio,
+            observation.vertical_ratio,
+        )
+        if offsets is None:
+            states.append(False)
+            continue
+
+        horizontal_offset, vertical_offset = offsets
+        states.append(
+            abs(horizontal_offset - reference_horizontal) <= center_limit
+            and abs(vertical_offset - reference_vertical) <= center_limit
+        )
+
+    return states
+
+
+def _primary_attention_segments(observations, total_duration, min_segment_duration):
+    segments = []
+    segment_start = None
+
+    for observation in observations:
+        is_primary = observation.face_detected and observation.looking_at_primary
+        if is_primary:
+            if segment_start is None:
+                segment_start = observation.time
+            continue
+
+        if segment_start is not None:
+            if observation.time - segment_start >= min_segment_duration:
+                segments.append((segment_start, observation.time))
+            segment_start = None
+
+    if segment_start is not None and total_duration - segment_start >= min_segment_duration:
+        segments.append((segment_start, total_duration))
+
+    return segments
 
 
 def _combined_horizontal_attention_offset(yaw, yaw_threshold, gaze_horizontal_ratio):
@@ -350,6 +435,7 @@ def analyse_gaze(
             results = face_mesh.process(rgb)
 
             is_looking = False
+            camera_contact = False
             label = "No face"
             pitch = yaw = roll = None
             gaze_observation = None
@@ -365,6 +451,14 @@ def analyse_gaze(
 
                 if pose is not None:
                     pitch, yaw, roll, rvec, tvec, camera_matrix, dist_coeffs = pose
+
+                    camera_contact = _is_looking_at_camera(
+                        pitch,
+                        yaw,
+                        yaw_threshold,
+                        pitch_threshold,
+                        gaze_observation,
+                    )
 
                     if attention_reference_tracker.update_and_check(
                         pitch,
@@ -395,12 +489,13 @@ def analyse_gaze(
             if confidence_scorer is not None:
                 confidence_scorer.update(FrameObservation(
                     face_detected=face_detected,
-                    looking_at_camera=is_looking
+                    looking_at_camera=camera_contact,
                 ))
             visual_feature_tracker.update(
                 current_time=current_time,
                 face_detected=face_detected,
-                looking_at_camera=is_looking,
+                looking_at_camera=camera_contact,
+                looking_at_primary=is_looking,
                 pitch=pitch,
                 yaw=yaw,
                 roll=roll,
@@ -480,9 +575,37 @@ def analyse_gaze(
         )
 
     total_duration = frame_idx / fps
-    if current_segment_start is not None:
-        if total_duration - current_segment_start >= min_segment_duration:
-            segments.append((current_segment_start, total_duration))
+
+    if source_type == "video":
+        reference_horizontal, reference_vertical = (
+            attention_reference_tracker.dominant_reference_offset()
+        )
+        primary_attention_states = _fixed_primary_attention_states(
+            visual_feature_tracker.observations,
+            reference_horizontal,
+            reference_vertical,
+            yaw_threshold,
+            pitch_threshold,
+        )
+    else:
+        reference_horizontal, reference_vertical = (
+            attention_reference_tracker.reference_offset()
+        )
+        primary_attention_states = [
+            observation.looking_at_primary
+            for observation in visual_feature_tracker.observations
+        ]
+
+    visual_feature_tracker.set_primary_attention_states(
+        primary_attention_states,
+        reference_horizontal,
+        reference_vertical,
+    )
+    segments = _primary_attention_segments(
+        visual_feature_tracker.observations,
+        total_duration,
+        min_segment_duration,
+    )
 
     cap.release()
     if writer is not None:

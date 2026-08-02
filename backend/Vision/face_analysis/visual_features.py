@@ -9,6 +9,7 @@ class VisualFrameObservation:
     time: float
     face_detected: bool
     looking_at_camera: bool
+    looking_at_primary: bool
     pitch: float | None = None
     yaw: float | None = None
     roll: float | None = None
@@ -24,6 +25,7 @@ class VisualFeatureTracker:
     total_frames: int = 0
     face_detected_frames: int = 0
     looking_at_camera_frames: int = 0
+    looking_at_primary_frames: int = 0
     valid_gaze_frames: int = 0
     gaze_center_frames: int = 0
     blink_count: int = 0
@@ -38,12 +40,15 @@ class VisualFeatureTracker:
     vertical_gaze_ratios: list[float] = field(default_factory=list)
     previous_head_pose: tuple[float, float, float] | None = None
     observations: list[VisualFrameObservation] = field(default_factory=list)
+    primary_attention_reference_horizontal: float | None = None
+    primary_attention_reference_vertical: float | None = None
 
     def update(
         self,
         current_time,
         face_detected,
         looking_at_camera,
+        looking_at_primary=None,
         pitch=None,
         yaw=None,
         roll=None,
@@ -53,6 +58,9 @@ class VisualFeatureTracker:
             current_time=current_time,
             face_detected=face_detected,
             looking_at_camera=looking_at_camera,
+            looking_at_primary=(
+                looking_at_camera if looking_at_primary is None else looking_at_primary
+            ),
             pitch=pitch,
             yaw=yaw,
             roll=roll,
@@ -68,16 +76,22 @@ class VisualFeatureTracker:
         if looking_at_camera:
             self.looking_at_camera_frames += 1
 
-        self._update_looking_away_segments(current_time, looking_at_camera)
+        if observation.looking_at_primary:
+            self.looking_at_primary_frames += 1
+
+        self._update_looking_away_segments(
+            current_time,
+            face_detected,
+            observation.looking_at_primary,
+        )
         self._update_head_pose(pitch, yaw, roll)
         self._update_gaze(gaze_observation)
 
     def finish(self, total_duration):
-        if self.current_looking_away_start is not None:
-            self.looking_away_segments.append((self.current_looking_away_start, total_duration))
-            self.current_looking_away_start = None
+        self._rebuild_looking_away_segments(total_duration)
 
         attention_context = self._attention_context(self.observations)
+        self._add_primary_attention_reference(attention_context)
         looking_away_durations = [
             end - start
             for start, end in self.looking_away_segments
@@ -89,6 +103,20 @@ class VisualFeatureTracker:
             "eye_contact_ratio": self._safe_ratio(
                 self.looking_at_camera_frames,
                 self.face_detected_frames,
+            ),
+            "primary_attention_ratio": self._safe_ratio(
+                self.looking_at_primary_frames,
+                self.face_detected_frames,
+            ),
+            "look_away_ratio": self._safe_ratio(
+                self.face_detected_frames - self.looking_at_primary_frames,
+                self.face_detected_frames,
+            ),
+            "primary_attention_reference_horizontal": (
+                self.primary_attention_reference_horizontal
+            ),
+            "primary_attention_reference_vertical": (
+                self.primary_attention_reference_vertical
             ),
             "face_visibility_ratio": self._safe_ratio(
                 self.face_detected_frames,
@@ -125,6 +153,7 @@ class VisualFeatureTracker:
             return []
 
         attention_context = self._attention_context(self.observations)
+        self._add_primary_attention_reference(attention_context)
         rows = []
         window_start = 0.0
         while window_start < total_duration:
@@ -151,11 +180,39 @@ class VisualFeatureTracker:
 
         return rows
 
+    def set_primary_attention_states(
+        self,
+        states,
+        reference_horizontal,
+        reference_vertical,
+    ):
+        """Apply one fixed, video-level attention reference to all observations."""
+        if len(states) != len(self.observations):
+            raise ValueError("Primary-attention states must match the observation count")
+
+        for observation, state in zip(self.observations, states):
+            observation.looking_at_primary = bool(state) and observation.face_detected
+
+        self.looking_at_primary_frames = sum(
+            1 for observation in self.observations if observation.looking_at_primary
+        )
+        self.primary_attention_reference_horizontal = reference_horizontal
+        self.primary_attention_reference_vertical = reference_vertical
+
+    def _add_primary_attention_reference(self, attention_context):
+        attention_context["primary_attention_reference_horizontal"] = (
+            self.primary_attention_reference_horizontal
+        )
+        attention_context["primary_attention_reference_vertical"] = (
+            self.primary_attention_reference_vertical
+        )
+
     @staticmethod
     def _make_observation(
         current_time,
         face_detected,
         looking_at_camera,
+        looking_at_primary,
         pitch=None,
         yaw=None,
         roll=None,
@@ -165,6 +222,7 @@ class VisualFeatureTracker:
             time=current_time,
             face_detected=face_detected,
             looking_at_camera=looking_at_camera,
+            looking_at_primary=looking_at_primary,
             pitch=pitch,
             yaw=yaw,
             roll=roll,
@@ -180,6 +238,7 @@ class VisualFeatureTracker:
         total_frames = len(observations)
         face_detected_frames = sum(1 for obs in observations if obs.face_detected)
         looking_at_camera_frames = sum(1 for obs in observations if obs.looking_at_camera)
+        looking_at_primary_frames = sum(1 for obs in observations if obs.looking_at_primary)
         valid_gaze_frames = sum(1 for obs in observations if obs.gaze_direction is not None)
         gaze_center_frames = sum(1 for obs in observations if obs.gaze_is_center)
         blink_count = cls._count_blink_events(observations)
@@ -208,6 +267,20 @@ class VisualFeatureTracker:
             "window_duration": round(duration, 2),
             "window_frames": total_frames,
             "eye_contact_ratio": cls._safe_ratio(looking_at_camera_frames, face_detected_frames),
+            "primary_attention_ratio": cls._safe_ratio(
+                looking_at_primary_frames,
+                face_detected_frames,
+            ),
+            "look_away_ratio": cls._safe_ratio(
+                face_detected_frames - looking_at_primary_frames,
+                face_detected_frames,
+            ),
+            "primary_attention_reference_horizontal": (
+                attention_context.get("primary_attention_reference_horizontal")
+            ),
+            "primary_attention_reference_vertical": (
+                attention_context.get("primary_attention_reference_vertical")
+            ),
             "face_visibility_ratio": cls._safe_ratio(face_detected_frames, total_frames),
             "gaze_center_ratio": cls._safe_ratio(gaze_center_frames, valid_gaze_frames),
             "valid_gaze_frames": valid_gaze_frames,
@@ -242,6 +315,8 @@ class VisualFeatureTracker:
             "secondary_gaze_zone_ratio": 0.0,
             "primary_head_pitch": None,
             "primary_head_yaw": None,
+            "primary_attention_reference_horizontal": None,
+            "primary_attention_reference_vertical": None,
         }
 
         if gaze_points:
@@ -343,8 +418,13 @@ class VisualFeatureTracker:
             return 0.0
         return cls._safe_ratio(sum(1 for value in values if value > threshold), len(values))
 
-    def _update_looking_away_segments(self, current_time, looking_at_camera):
-        if looking_at_camera:
+    def _update_looking_away_segments(
+        self,
+        current_time,
+        face_detected,
+        looking_at_primary,
+    ):
+        if not face_detected or looking_at_primary:
             if self.current_looking_away_start is not None:
                 self.looking_away_segments.append((self.current_looking_away_start, current_time))
                 self.current_looking_away_start = None
@@ -352,6 +432,23 @@ class VisualFeatureTracker:
 
         if self.current_looking_away_start is None:
             self.current_looking_away_start = current_time
+
+    def _rebuild_looking_away_segments(self, total_duration):
+        self.current_looking_away_start = None
+        self.looking_away_segments = []
+
+        for observation in self.observations:
+            self._update_looking_away_segments(
+                observation.time,
+                observation.face_detected,
+                observation.looking_at_primary,
+            )
+
+        if self.current_looking_away_start is not None:
+            self.looking_away_segments.append(
+                (self.current_looking_away_start, total_duration)
+            )
+            self.current_looking_away_start = None
 
     def _update_head_pose(self, pitch, yaw, roll):
         if pitch is None or yaw is None or roll is None:
@@ -446,7 +543,7 @@ class VisualFeatureTracker:
 
         duration = 0.0
         for index, obs in enumerate(observations):
-            if obs.looking_at_camera:
+            if not obs.face_detected or obs.looking_at_primary:
                 continue
 
             if index + 1 < len(observations):
