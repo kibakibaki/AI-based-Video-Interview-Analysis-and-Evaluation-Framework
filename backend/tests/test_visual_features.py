@@ -1,46 +1,48 @@
 import unittest
 
 from Vision.face_analysis.analysis_utils import (
-    AttentionReferenceTracker,
-    _fixed_primary_attention_states,
+    _window_primary_attention_states,
 )
 from Vision.face_analysis.visual_features import VisualFrameObservation
 from Vision.face_analysis.visual_features import VisualFeatureTracker
 
 
 class VisualFeatureTrackerTest(unittest.TestCase):
-    def test_full_video_reference_is_applied_to_each_window_observation(self):
-        reference_tracker = AttentionReferenceTracker(min_samples=30)
-        for _ in range(5):
-            reference_tracker.update_and_check(
-                pitch=0.0,
-                yaw=25.0,
-                yaw_threshold=25.0,
-                pitch_threshold=20.0,
-                gaze_observation=None,
-            )
-
-        reference_horizontal, reference_vertical = (
-            reference_tracker.dominant_reference_offset()
-        )
+    def test_each_window_uses_its_own_primary_attention_reference(self):
         observations = [
-            VisualFrameObservation(0.0, True, False, False, pitch=0.0, yaw=25.0),
-            VisualFrameObservation(1.0, True, False, False, pitch=0.0, yaw=75.0),
+            VisualFrameObservation(0.1, True, False, False, pitch=0.0, yaw=0.0),
+            VisualFrameObservation(1.1, True, False, False, pitch=0.0, yaw=0.0),
+            VisualFrameObservation(2.1, True, False, False, pitch=0.0, yaw=75.0),
+            VisualFrameObservation(3.1, True, False, False, pitch=0.0, yaw=75.0),
+            VisualFrameObservation(4.1, True, False, False, pitch=0.0, yaw=75.0),
+            VisualFrameObservation(5.1, True, False, False, pitch=0.0, yaw=0.0),
         ]
 
-        states = _fixed_primary_attention_states(
+        states, references = _window_primary_attention_states(
             observations,
-            reference_horizontal,
-            reference_vertical,
+            total_duration=6.0,
             yaw_threshold=25.0,
             pitch_threshold=20.0,
         )
 
-        self.assertEqual(reference_horizontal, 1.0)
-        self.assertEqual(reference_vertical, 0.0)
-        self.assertEqual(states, [True, False])
+        self.assertEqual(references[(0.0, 3.0)], (0.0, 0.0))
+        self.assertEqual(references[(3.0, 6.0)], (3.0, 0.0))
+        self.assertEqual(states, [True, True, False, True, True, False])
 
-    def test_fixed_primary_attention_drives_window_look_away_features(self):
+        tracker = VisualFeatureTracker(
+            total_frames=len(observations),
+            face_detected_frames=len(observations),
+            observations=observations,
+        )
+        tracker.set_window_primary_attention_states(states, references)
+        windows = tracker.window_features(total_duration=6.0)
+
+        self.assertEqual(windows[0]["primary_head_yaw"], 0.0)
+        self.assertEqual(windows[1]["primary_head_yaw"], 75.0)
+        self.assertEqual(windows[0]["primary_attention_reference_horizontal"], 0.0)
+        self.assertEqual(windows[1]["primary_attention_reference_horizontal"], 3.0)
+
+    def test_window_primary_attention_drives_look_away_features(self):
         tracker = VisualFeatureTracker()
 
         for second, camera_contact in enumerate([True, False, False, False]):
@@ -51,10 +53,9 @@ class VisualFeatureTrackerTest(unittest.TestCase):
                 looking_at_primary=camera_contact,
             )
 
-        tracker.set_primary_attention_states(
+        tracker.set_window_primary_attention_states(
             [True, False, False, True],
-            reference_horizontal=0.5,
-            reference_vertical=-0.5,
+            {(0.0, 4.0): (0.5, -0.5)},
         )
 
         summary = tracker.finish(total_duration=4.0)
@@ -80,7 +81,10 @@ class VisualFeatureTrackerTest(unittest.TestCase):
         tracker.update(1.0, False, False, looking_at_primary=False)
         tracker.update(2.0, True, False, looking_at_primary=False)
 
-        tracker.set_primary_attention_states([True, False, False], 0.0, 0.0)
+        tracker.set_window_primary_attention_states(
+            [True, False, False],
+            {(0.0, 3.0): (0.0, 0.0)},
+        )
         window = tracker.window_features(
             total_duration=3.0,
             window_size=3.0,

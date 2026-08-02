@@ -207,13 +207,12 @@ data/output/sample1_windows.csv
 
 For both training and future prediction, videos are not physically cut into 3 second video files. The analyser reads the original video, groups observations into 3 second windows in memory, and writes only tabular feature rows to CSV.
 
-For offline video analysis, the analyser first finds one fixed primary-attention
-reference from the dominant combined head-and-eye direction across the complete
-video. Every 3 second window is then compared with that same reference. The
-resulting `primary_attention_ratio`, `look_away_ratio`, and
-`looking_away_total_time` features therefore do not redefine a sustained
-look-away as the normal point for that individual window. `eye_contact_ratio`
-is kept separately and measures camera-centred attention.
+For offline video analysis, each 3 second window independently finds its primary
+attention reference from the dominant combined head-and-eye direction inside
+that window. The resulting `primary_attention_ratio`, `look_away_ratio`, and
+`looking_away_total_time` features are calculated relative to that window-level
+reference. `eye_contact_ratio` is kept separately and measures camera-centred
+attention.
 
 After changing automatic feature logic, regenerate existing outputs before
 rebuilding the training dataset:

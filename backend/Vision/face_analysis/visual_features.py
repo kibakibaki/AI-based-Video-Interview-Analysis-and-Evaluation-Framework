@@ -42,6 +42,10 @@ class VisualFeatureTracker:
     observations: list[VisualFrameObservation] = field(default_factory=list)
     primary_attention_reference_horizontal: float | None = None
     primary_attention_reference_vertical: float | None = None
+    primary_attention_window_references: dict[
+        tuple[float, float],
+        tuple[float | None, float | None],
+    ] = field(default_factory=dict)
 
     def update(
         self,
@@ -152,8 +156,6 @@ class VisualFeatureTracker:
         if total_duration <= 0 or not self.observations:
             return []
 
-        attention_context = self._attention_context(self.observations)
-        self._add_primary_attention_reference(attention_context)
         rows = []
         window_start = 0.0
         while window_start < total_duration:
@@ -167,6 +169,12 @@ class VisualFeatureTracker:
                 if window_start <= observation.time < window_end
             ]
             if window_observations:
+                attention_context = self._attention_context(window_observations)
+                self._add_primary_attention_reference(
+                    attention_context,
+                    window_start,
+                    window_end,
+                )
                 rows.append(self._features_for_window(
                     window_start,
                     window_end,
@@ -186,7 +194,7 @@ class VisualFeatureTracker:
         reference_horizontal,
         reference_vertical,
     ):
-        """Apply one fixed, video-level attention reference to all observations."""
+        """Apply one shared attention reference, used for live camera analysis."""
         if len(states) != len(self.observations):
             raise ValueError("Primary-attention states must match the observation count")
 
@@ -198,8 +206,43 @@ class VisualFeatureTracker:
         )
         self.primary_attention_reference_horizontal = reference_horizontal
         self.primary_attention_reference_vertical = reference_vertical
+        self.primary_attention_window_references = {}
 
-    def _add_primary_attention_reference(self, attention_context):
+    def set_window_primary_attention_states(self, states, references):
+        """Apply independently calculated primary-attention states per window."""
+        if len(states) != len(self.observations):
+            raise ValueError("Primary-attention states must match the observation count")
+
+        for observation, state in zip(self.observations, states):
+            observation.looking_at_primary = bool(state) and observation.face_detected
+
+        self.looking_at_primary_frames = sum(
+            1 for observation in self.observations if observation.looking_at_primary
+        )
+        self.primary_attention_reference_horizontal = None
+        self.primary_attention_reference_vertical = None
+        self.primary_attention_window_references = dict(references)
+
+    def _add_primary_attention_reference(
+        self,
+        attention_context,
+        window_start=None,
+        window_end=None,
+    ):
+        if window_start is not None and window_end is not None:
+            reference = self.primary_attention_window_references.get(
+                (round(window_start, 2), round(window_end, 2))
+            )
+            if reference is not None:
+                reference_horizontal, reference_vertical = reference
+                attention_context["primary_attention_reference_horizontal"] = (
+                    reference_horizontal
+                )
+                attention_context["primary_attention_reference_vertical"] = (
+                    reference_vertical
+                )
+                return
+
         attention_context["primary_attention_reference_horizontal"] = (
             self.primary_attention_reference_horizontal
         )

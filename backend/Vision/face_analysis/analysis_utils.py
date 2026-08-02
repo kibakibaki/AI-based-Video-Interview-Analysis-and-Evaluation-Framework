@@ -55,14 +55,17 @@ class AttentionReferenceTracker:
             return is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold)
 
         horizontal_offset, vertical_offset = offsets
-        self.samples += 1
-        self.offset_bin_counts[self._offset_bin(horizontal_offset, vertical_offset)] += 1
+        self.observe_offsets(horizontal_offset, vertical_offset)
 
         reference_horizontal, reference_vertical = self.reference_offset()
         return (
             abs(horizontal_offset - reference_horizontal) <= self.center_limit
             and abs(vertical_offset - reference_vertical) <= self.center_limit
         )
+
+    def observe_offsets(self, horizontal_offset, vertical_offset):
+        self.samples += 1
+        self.offset_bin_counts[self._offset_bin(horizontal_offset, vertical_offset)] += 1
 
     def reference_offset(self):
         if self.samples < self.min_samples or not self.offset_bin_counts:
@@ -220,6 +223,75 @@ def _fixed_primary_attention_states(
         )
 
     return states
+
+
+def _window_primary_attention_states(
+    observations,
+    total_duration,
+    yaw_threshold,
+    pitch_threshold,
+    window_size=3.0,
+    step_size=3.0,
+):
+    states = [False] * len(observations)
+    references = {}
+    window_start = 0.0
+
+    while window_start < total_duration:
+        window_end = min(window_start + window_size, total_duration)
+        if window_end <= window_start:
+            break
+
+        observation_indices = [
+            index
+            for index, observation in enumerate(observations)
+            if window_start <= observation.time < window_end
+        ]
+        reference_tracker = AttentionReferenceTracker(min_samples=0)
+
+        for index in observation_indices:
+            observation = observations[index]
+            if not observation.face_detected:
+                continue
+
+            offsets = _attention_offsets_from_ratios(
+                observation.pitch,
+                observation.yaw,
+                yaw_threshold,
+                pitch_threshold,
+                observation.horizontal_ratio,
+                observation.vertical_ratio,
+            )
+            if offsets is not None:
+                reference_tracker.observe_offsets(*offsets)
+
+        reference_key = (round(window_start, 2), round(window_end, 2))
+        if reference_tracker.samples:
+            reference_horizontal, reference_vertical = (
+                reference_tracker.dominant_reference_offset()
+            )
+            references[reference_key] = (
+                reference_horizontal,
+                reference_vertical,
+            )
+            window_observations = [observations[index] for index in observation_indices]
+            window_states = _fixed_primary_attention_states(
+                window_observations,
+                reference_horizontal,
+                reference_vertical,
+                yaw_threshold,
+                pitch_threshold,
+            )
+            for index, state in zip(observation_indices, window_states):
+                states[index] = state
+        else:
+            references[reference_key] = (None, None)
+
+        if window_end >= total_duration:
+            break
+        window_start += step_size
+
+    return states, references
 
 
 def _primary_attention_segments(observations, total_duration, min_segment_duration):
@@ -577,15 +649,17 @@ def analyse_gaze(
     total_duration = frame_idx / fps
 
     if source_type == "video":
-        reference_horizontal, reference_vertical = (
-            attention_reference_tracker.dominant_reference_offset()
+        primary_attention_states, window_references = (
+            _window_primary_attention_states(
+                visual_feature_tracker.observations,
+                total_duration,
+                yaw_threshold,
+                pitch_threshold,
+            )
         )
-        primary_attention_states = _fixed_primary_attention_states(
-            visual_feature_tracker.observations,
-            reference_horizontal,
-            reference_vertical,
-            yaw_threshold,
-            pitch_threshold,
+        visual_feature_tracker.set_window_primary_attention_states(
+            primary_attention_states,
+            window_references,
         )
     else:
         reference_horizontal, reference_vertical = (
@@ -595,12 +669,11 @@ def analyse_gaze(
             observation.looking_at_primary
             for observation in visual_feature_tracker.observations
         ]
-
-    visual_feature_tracker.set_primary_attention_states(
-        primary_attention_states,
-        reference_horizontal,
-        reference_vertical,
-    )
+        visual_feature_tracker.set_primary_attention_states(
+            primary_attention_states,
+            reference_horizontal,
+            reference_vertical,
+        )
     segments = _primary_attention_segments(
         visual_feature_tracker.observations,
         total_duration,
