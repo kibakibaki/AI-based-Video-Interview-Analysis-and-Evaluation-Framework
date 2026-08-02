@@ -1,7 +1,10 @@
 # analysis_utils.py
+from collections import Counter
+
 import cv2
 import os
 import mediapipe as mp
+import time
 
 from .confidence_scoring import ConfidenceScorer, FrameObservation, print_confidence_report
 from .gaze_utils import PupilGazeTracker
@@ -12,6 +15,67 @@ from .head_pose_utils import (
     is_head_facing_camera,
 )
 from .visual_features import VisualFeatureTracker
+
+GAZE_RATIO_CENTER = 0.5
+GAZE_DIRECTIONAL_RANGE = 0.15
+ATTENTION_CENTER_LIMIT = 1.0
+ATTENTION_REFERENCE_BIN_SIZE = 0.5
+ATTENTION_REFERENCE_MIN_SAMPLES = 30
+
+
+class AttentionReferenceTracker:
+    def __init__(
+        self,
+        bin_size=ATTENTION_REFERENCE_BIN_SIZE,
+        min_samples=ATTENTION_REFERENCE_MIN_SAMPLES,
+        center_limit=ATTENTION_CENTER_LIMIT,
+    ):
+        self.bin_size = bin_size
+        self.min_samples = min_samples
+        self.center_limit = center_limit
+        self.offset_bin_counts = Counter()
+        self.samples = 0
+
+    def update_and_check(
+        self,
+        pitch,
+        yaw,
+        yaw_threshold,
+        pitch_threshold,
+        gaze_observation,
+    ):
+        offsets = _attention_offsets(
+            pitch,
+            yaw,
+            yaw_threshold,
+            pitch_threshold,
+            gaze_observation,
+        )
+        if offsets is None:
+            return is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold)
+
+        horizontal_offset, vertical_offset = offsets
+        self.samples += 1
+        self.offset_bin_counts[self._offset_bin(horizontal_offset, vertical_offset)] += 1
+
+        reference_horizontal, reference_vertical = self.reference_offset()
+        return (
+            abs(horizontal_offset - reference_horizontal) <= self.center_limit
+            and abs(vertical_offset - reference_vertical) <= self.center_limit
+        )
+
+    def reference_offset(self):
+        if self.samples < self.min_samples or not self.offset_bin_counts:
+            return 0.0, 0.0
+
+        primary_bin, _ = self.offset_bin_counts.most_common(1)[0]
+        return primary_bin[0] * self.bin_size, primary_bin[1] * self.bin_size
+
+    def _offset_bin(self, horizontal_offset, vertical_offset):
+        return (
+            round(horizontal_offset / self.bin_size),
+            round(vertical_offset / self.bin_size),
+        )
 
 
 def _face_mesh_solution():
@@ -32,11 +96,103 @@ def _is_looking_at_camera(
     pitch_threshold,
     gaze_observation=None
 ):
-    head_facing = is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold)
-    if gaze_observation is None or gaze_observation.direction is None:
-        return head_facing
+    attention_centered = _is_attention_centered(
+        pitch,
+        yaw,
+        yaw_threshold,
+        pitch_threshold,
+        gaze_observation,
+    )
+    if (
+        gaze_observation is None
+        or (
+            gaze_observation.horizontal_ratio is None
+            and gaze_observation.vertical_ratio is None
+        )
+    ):
+        return is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold)
 
-    return head_facing and gaze_observation.is_center
+    return attention_centered
+
+
+def _is_attention_centered(
+    pitch,
+    yaw,
+    yaw_threshold,
+    pitch_threshold,
+    gaze_observation,
+):
+    if gaze_observation is None:
+        return is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold)
+
+    offsets = _attention_offsets(
+        pitch,
+        yaw,
+        yaw_threshold,
+        pitch_threshold,
+        gaze_observation,
+    )
+    if offsets is None:
+        return is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold)
+
+    horizontal_offset, vertical_offset = offsets
+
+    return (
+        abs(horizontal_offset) <= ATTENTION_CENTER_LIMIT
+        and abs(vertical_offset) <= ATTENTION_CENTER_LIMIT
+    )
+
+
+def _attention_offsets(pitch, yaw, yaw_threshold, pitch_threshold, gaze_observation):
+    if pitch is None or yaw is None:
+        return None
+
+    gaze_horizontal_ratio = None
+    gaze_vertical_ratio = None
+    if gaze_observation is not None:
+        gaze_horizontal_ratio = gaze_observation.horizontal_ratio
+        gaze_vertical_ratio = gaze_observation.vertical_ratio
+
+    return (
+        _combined_horizontal_attention_offset(yaw, yaw_threshold, gaze_horizontal_ratio),
+        _combined_vertical_attention_offset(pitch, pitch_threshold, gaze_vertical_ratio),
+    )
+
+
+def _combined_horizontal_attention_offset(yaw, yaw_threshold, gaze_horizontal_ratio):
+    head_offset = _safe_normalized(yaw, yaw_threshold)
+    gaze_offset = _gaze_ratio_offset(gaze_horizontal_ratio)
+    if gaze_offset is None:
+        return head_offset
+    return head_offset + gaze_offset
+
+
+def _combined_vertical_attention_offset(pitch, pitch_threshold, gaze_vertical_ratio):
+    head_offset = _safe_normalized(_signed_front_angle(pitch), pitch_threshold)
+    gaze_offset = _gaze_ratio_offset(gaze_vertical_ratio)
+    if gaze_offset is None:
+        return head_offset
+    return head_offset + gaze_offset
+
+
+def _gaze_ratio_offset(ratio):
+    if ratio is None:
+        return None
+    return (ratio - GAZE_RATIO_CENTER) / GAZE_DIRECTIONAL_RANGE
+
+
+def _safe_normalized(value, threshold):
+    if threshold <= 0:
+        return value
+    return value / threshold
+
+
+def _signed_front_angle(angle):
+    if abs(angle) <= abs(abs(angle) - 180):
+        return angle
+    if angle >= 0:
+        return angle - 180
+    return angle + 180
 
 
 def analyse_gaze(
@@ -53,7 +209,7 @@ def analyse_gaze(
     enable_confidence_scoring=True
 ):
     """
-    Analyse whether the person is roughly looking at the camera from a video
+    Analyse whether the person is roughly looking at their primary attention point from a video
     file or a webcam stream.
 
     Parameters:
@@ -61,8 +217,8 @@ def analyse_gaze(
         video_path: input video path when source_type is "video"
         camera_index: webcam index when source_type is "camera"
         output_video_path: optional annotated video output path
-        yaw_threshold: abs(yaw) <= threshold => looking at camera
-        pitch_threshold: abs(pitch) <= threshold => looking at camera
+        yaw_threshold: horizontal tolerance used when estimating attention direction
+        pitch_threshold: vertical tolerance used when estimating attention direction
         min_segment_duration: minimum duration (seconds) to keep
         use_eye_gaze: combine GazeTracking pupil direction with head pose
         analysis_frame_stride: analyse one frame every N frames
@@ -89,7 +245,12 @@ def analyse_gaze(
         cap = cv2.VideoCapture(video_path)
         source_label = video_path
     else:
-        cap = cv2.VideoCapture(camera_index)
+        cap = cv2.VideoCapture(camera_index, cv2.CAP_AVFOUNDATION)
+        if not cap.isOpened():
+            cap.release()
+            cap = cv2.VideoCapture(camera_index)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         source_label = f"camera {camera_index}"
 
     mp_face_mesh = _face_mesh_solution()
@@ -113,10 +274,16 @@ def analyse_gaze(
         writer = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
 
     frame_idx = 0
+    failed_camera_reads = 0
+    black_camera_frames = 0
+    max_failed_camera_reads = 100
+    max_black_camera_frames = 100
+    camera_error = None
     segments = []
     confidence_scorer = ConfidenceScorer() if enable_confidence_scoring else None
     pupil_gaze_tracker = PupilGazeTracker() if use_eye_gaze else None
     visual_feature_tracker = VisualFeatureTracker()
+    attention_reference_tracker = AttentionReferenceTracker()
 
     current_segment_start = None
 
@@ -131,7 +298,47 @@ def analyse_gaze(
         while True:
             ret, frame = cap.read()
             if not ret:
+                if source_type == "camera":
+                    failed_camera_reads += 1
+                    if failed_camera_reads <= max_failed_camera_reads:
+                        if show_preview:
+                            if cv2.waitKey(50) & 0xFF == ord("q"):
+                                break
+                        else:
+                            time.sleep(0.05)
+                        continue
                 break
+            failed_camera_reads = 0
+
+            if frame is None or frame.size == 0:
+                frame_idx += 1
+                continue
+
+            if source_type == "camera":
+                gray_preview = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if gray_preview.mean() < 2:
+                    black_camera_frames += 1
+                    if show_preview:
+                        preview = frame.copy()
+                        cv2.putText(preview, f"Camera {camera_index}: black feed", (20, 40),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                        cv2.putText(preview, "Try another CAMERA_INDEX. Press q to quit.", (20, 80),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.imshow("Gaze Analysis", preview)
+                        if cv2.waitKey(50) & 0xFF == ord("q"):
+                            break
+                    else:
+                        time.sleep(0.05)
+                    if black_camera_frames >= max_black_camera_frames:
+                        camera_error = (
+                            f"{source_label} opened but returned a black feed. "
+                            "This usually means OpenCV selected the wrong camera device. "
+                            "Try running with another index, for example: "
+                            "CAMERA_INDEX=1 ./run_app.sh"
+                        )
+                        break
+                    continue
+                black_camera_frames = 0
 
             if frame_idx % analysis_frame_stride != 0:
                 if writer is not None:
@@ -159,17 +366,17 @@ def analyse_gaze(
                 if pose is not None:
                     pitch, yaw, roll, rvec, tvec, camera_matrix, dist_coeffs = pose
 
-                    if _is_looking_at_camera(
+                    if attention_reference_tracker.update_and_check(
                         pitch,
                         yaw,
                         yaw_threshold,
                         pitch_threshold,
-                        gaze_observation=gaze_observation
+                        gaze_observation,
                     ):
                         is_looking = True
-                        label = "Looking at camera"
+                        label = "Looking at primary point"
                     else:
-                        label = "Looking elsewhere"
+                        label = "Looking away from primary point"
 
                     draw_head_direction(frame, rvec, tvec, camera_matrix, dist_coeffs)
 
@@ -215,6 +422,12 @@ def analyse_gaze(
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             text_y = 200
+            if face_detected:
+                ref_horizontal, ref_vertical = attention_reference_tracker.reference_offset()
+                cv2.putText(frame, f"Primary ref: H {ref_horizontal:.1f}, V {ref_vertical:.1f}", (20, text_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                text_y += 30
+
             if gaze_observation is not None:
                 gaze_label = gaze_observation.direction or "unknown"
                 cv2.putText(frame, f"Gaze: {gaze_label}", (20, text_y),
@@ -253,6 +466,19 @@ def analyse_gaze(
 
             frame_idx += 1
 
+    if source_type == "camera" and (camera_error is not None or frame_idx == 0):
+        cap.release()
+        if writer is not None:
+            writer.release()
+        if show_preview:
+            cv2.destroyAllWindows()
+        if camera_error is not None:
+            raise ValueError(camera_error)
+        raise ValueError(
+            f"Cannot read usable frames from {source_label}. "
+            "The camera may be blocked, still starting, or returning a black feed."
+        )
+
     total_duration = frame_idx / fps
     if current_segment_start is not None:
         if total_duration - current_segment_start >= min_segment_duration:
@@ -268,14 +494,14 @@ def analyse_gaze(
     visual_features = visual_feature_tracker.finish(total_duration)
     window_features = visual_feature_tracker.window_features(total_duration)
 
-    print("\n Looking at camera time segments ")
+    print("\n Looking at primary attention point time segments ")
     if not segments:
-        print("No valid looking-at-camera segments found.")
+        print("No valid primary-attention segments found.")
     else:
         for i, (start, end) in enumerate(segments, 1):
             print(f"{i}. {start:.2f}s - {end:.2f}s  (duration: {end - start:.2f}s)")
 
-    print(f"\nTotal looking-at-camera time: {looking_total_time:.2f} seconds")
+    print(f"\nTotal primary-attention time: {looking_total_time:.2f} seconds")
     print(f"Video total duration: {total_duration:.2f} seconds")
 
     confidence_report = None

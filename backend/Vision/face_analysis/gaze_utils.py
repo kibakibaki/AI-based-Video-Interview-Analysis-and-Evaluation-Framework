@@ -37,7 +37,13 @@ class PupilGazeTracker:
         self._tracker = GazeTracking()
 
     def analyse_frame(self, frame):
-        self._tracker.refresh(frame)
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return None
+
+        try:
+            self._tracker.refresh(frame)
+        except Exception:
+            return None
 
         direction = None
         if self._tracker.is_left():
