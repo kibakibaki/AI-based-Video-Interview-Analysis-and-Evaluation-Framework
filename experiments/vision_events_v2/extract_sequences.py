@@ -38,7 +38,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--sample-rate", type=float, default=10.0)
     parser.add_argument("--window-seconds", type=float, default=3.0)
-    parser.add_argument("--target", choices=("binary", "level"), default="binary")
     parser.add_argument("--max-windows", type=int)
     parser.add_argument("--filenames", nargs="*", help="Optional video names or stems to include.")
     parser.add_argument("--seed", type=int, default=42)
@@ -53,7 +52,7 @@ def video_index(video_dir: Path) -> dict[str, Path]:
     return videos
 
 
-def load_label_rows(path: Path, target: str) -> list[dict[str, object]]:
+def load_label_rows(path: Path) -> list[dict[str, object]]:
     rows = []
     with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
         for row in csv.DictReader(csv_file):
@@ -71,7 +70,7 @@ def load_label_rows(path: Path, target: str) -> list[dict[str, object]]:
                     "start": start,
                     "end": end,
                     "level": int(level),
-                    "target": int(level) if target == "level" else int(level != "0"),
+                    "target": int(level != "0"),
                     "window_id": row.get("clip_id")
                     or f"{Path(row['filename']).stem}_{start:.2f}_{end:.2f}",
                 }
@@ -135,7 +134,7 @@ def main() -> None:
         raise SystemExit("--sample-rate and --window-seconds must be positive.")
 
     videos = video_index(args.video_dir)
-    rows = load_label_rows(args.labels, args.target)
+    rows = load_label_rows(args.labels)
     if args.filenames:
         requested_stems = {Path(filename).stem for filename in args.filenames}
         rows = [row for row in rows if row["stem"] in requested_stems]
@@ -212,12 +211,8 @@ def main() -> None:
         "sample_rate_hz": args.sample_rate,
         "window_seconds": args.window_seconds,
         "sequence_length": sequence_length,
-        "target": args.target,
-        "target_names": (
-            ["no_gaze_shift", "gaze_shift"]
-            if args.target == "binary"
-            else ["level_0", "level_1", "level_2"]
-        ),
+        "target": "binary",
+        "target_names": ["no_gaze_shift", "gaze_shift"],
         "source_labels": str(args.labels),
         "skipped_windows": skipped,
     }
@@ -243,4 +238,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -52,6 +52,22 @@ Temporal CNN         [[41,  6], [24, 18]]
 The Temporal CNN selected epoch 18 using validation macro F1. Random Forest
 remained the strongest model on this split.
 
+## RF rejection policy
+
+The upload workflow now treats low-quality and low-certainty windows as decision
+outcomes rather than forcing a binary prediction. The seed-42 Random Forest uses:
+
+- minimum face visibility: 0.50;
+- minimum valid iris/head-pose observability: 0.50;
+- minimum prediction probability: 0.644, selected on validation data by maximising
+  classified-window macro F1 subject to at least 75% validation coverage.
+
+The selected validation coverage was 0.761 and macro F1 on classified validation
+windows was 0.744. On the existing pilot test split, the policy returned 31
+`no_gaze_shift`, 26 `gaze_shift`, 32 `uncertain`, and 0 `unobservable` windows.
+The binary metrics above still evaluate all 89 windows without abstention, so they
+must not be confused with selective-prediction performance.
+
 ## Split sensitivity
 
 Five grouped runs used seeds 1, 7, 21, 42, and 84. Each seed changed the held-out

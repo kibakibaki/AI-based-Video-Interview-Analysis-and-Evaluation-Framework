@@ -16,7 +16,7 @@ from Vision.face_analysis.head_pose_utils import (  # noqa: E402
     angle_distance_from_front,
     signed_angle_from_front,
 )
-from experiments.vision_events_v2 import vision_features  # noqa: E402
+from Vision.face_analysis import gaze_shift_features  # noqa: E402
 
 
 class SignedAngleFromFrontTests(unittest.TestCase):
@@ -101,16 +101,16 @@ class V2HeadPitchFeatureTests(unittest.TestCase):
 
     def test_v2_feature_uses_signed_front_pitch_instead_of_raw_euler_pitch(self):
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
-        pitch_index = vision_features.FEATURE_NAMES.index("head_pitch")
+        pitch_index = gaze_shift_features.FEATURE_NAMES.index("head_pitch")
 
         for raw_pitch, expected_pitch in ((179.0, -1.0), (-179.0, 1.0)):
             with self.subTest(raw_pitch=raw_pitch):
                 with patch.object(
-                    vision_features,
+                    gaze_shift_features,
                     "estimate_head_pose",
                     return_value=(raw_pitch, 5.0, 6.0),
                 ):
-                    features = vision_features.extract_frame_features(
+                    features = gaze_shift_features.extract_frame_features(
                         frame,
                         self._face_mesh_with_landmarks(),
                     )

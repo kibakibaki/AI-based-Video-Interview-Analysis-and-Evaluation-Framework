@@ -8,6 +8,11 @@ from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from Vision import analyse_gaze
+from Vision.face_analysis.gaze_shift_classifier import (
+    GazeShiftModelContractError,
+    GazeShiftModelUnavailable,
+    classify_gaze_shift_video,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -22,7 +27,7 @@ MAX_DURATION_SECONDS = 5 * 60
 
 # Change this variable to choose what happens when running this file directly.
 # "server" starts the upload website; "analysis" runs the local gaze analysis.
-APP_MODE = "analysis"
+APP_MODE = os.environ.get("APP_MODE", "server")
 # Change this variable to switch local analysis input.
 # Valid values: "camera", "single_camera", or "video".
 ANALYSIS_SOURCE = "camera"
@@ -79,15 +84,17 @@ def _new_upload_filename(extension):
 
 def _write_analysis_csv(filename, duration, analysis):
     csv_path = OUTPUT_DIR / f"{Path(filename).stem}.csv"
-    confidence_report = analysis["confidence_report"]
-    features = confidence_report.get("features", {})
+    gaze_shift_report = analysis["gaze_shift_report"]
+    summary = gaze_shift_report["summary"]
+    features = analysis.get("visual_features", {})
 
     row = {
         "filename": filename,
         "duration_seconds": round(duration, 2),
         "duration_label": _format_duration(duration),
-        "overall_score": confidence_report.get("overall_score"),
-        "confidence_label": confidence_report.get("label"),
+        "task": gaze_shift_report["task"],
+        "model": gaze_shift_report["model"],
+        **summary,
         "looking_total_time": analysis["looking_total_time"],
         "looking_segments_count": len(analysis["segments"]),
     }
@@ -107,18 +114,38 @@ def _write_analysis_csv(filename, duration, analysis):
 
 
 def _write_window_features_csv(filename, analysis):
-    window_rows = analysis["confidence_report"].get("window_features", [])
+    feature_rows = analysis.get("window_features", [])
+    prediction_rows = analysis["gaze_shift_report"].get("windows", [])
     csv_path = OUTPUT_DIR / f"{Path(filename).stem}_windows.csv"
 
-    if not window_rows:
+    if not prediction_rows:
         with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
             csv_file.write("filename\n")
         return csv_path
 
+    features_by_window = {
+        (row.get("window_start"), row.get("window_end")): row
+        for row in feature_rows
+    }
     rows = []
-    for window_row in window_rows:
-        row = {"filename": filename}
-        row.update(window_row)
+    for prediction in prediction_rows:
+        key = (prediction["window_start"], prediction["window_end"])
+        probabilities = prediction.get("probabilities", {})
+        row = {
+            "filename": filename,
+            **features_by_window.get(key, {}),
+            "window_start": prediction["window_start"],
+            "window_end": prediction["window_end"],
+            "gaze_state": prediction["state"],
+            "decision_reason": prediction.get("reason"),
+            "model_face_visibility_ratio": prediction.get("face_visibility_ratio"),
+            "model_visual_observability_ratio": prediction.get(
+                "visual_observability_ratio"
+            ),
+            "prediction_probability": prediction.get("prediction_probability"),
+            "probability_no_gaze_shift": probabilities.get("no_gaze_shift"),
+            "probability_gaze_shift": probabilities.get("gaze_shift"),
+        }
         rows.append(row)
 
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
@@ -130,7 +157,8 @@ def _write_window_features_csv(filename, analysis):
 
 
 def _build_analysis_response(filename, saved_path, duration):
-    segments, looking_total_time, confidence_report = analyse_gaze(
+    gaze_shift_report = classify_gaze_shift_video(saved_path)
+    segments, looking_total_time, visual_report = analyse_gaze(
         source_type="video",
         video_path=str(saved_path),
         output_video_path=None,
@@ -140,13 +168,14 @@ def _build_analysis_response(filename, saved_path, duration):
         use_eye_gaze=True,
         analysis_frame_stride=10,
         show_preview=False,
-        enable_confidence_scoring=True,
+        enable_confidence_scoring=False,
     )
-
     analysis = {
         "segments": _serialise_segments(segments),
         "looking_total_time": round(looking_total_time, 2),
-        "confidence_report": confidence_report,
+        "visual_features": visual_report.get("features", {}),
+        "window_features": visual_report.get("window_features", []),
+        "gaze_shift_report": gaze_shift_report,
         "duration_seconds": round(duration, 2),
         "duration_label": _format_duration(duration),
     }
@@ -171,7 +200,7 @@ def run_local_analysis():
                     pitch_threshold=20,
                     use_eye_gaze=True,
                     show_preview=True,
-                    enable_confidence_scoring=True,
+                    enable_confidence_scoring=False,
                 )
             except ValueError as exc:
                 last_error = exc
@@ -191,7 +220,7 @@ def run_local_analysis():
             pitch_threshold=20,
             use_eye_gaze=True,
             show_preview=True,
-            enable_confidence_scoring=True,
+            enable_confidence_scoring=False,
         )
 
     if ANALYSIS_SOURCE == "video":
@@ -205,7 +234,7 @@ def run_local_analysis():
             use_eye_gaze=True,
             analysis_frame_stride=5,
             show_preview=False,
-            enable_confidence_scoring=True,
+            enable_confidence_scoring=False,
         )
 
     raise ValueError('ANALYSIS_SOURCE must be "camera", "single_camera", or "video"')
@@ -301,7 +330,10 @@ def analyse_uploaded_video():
         }), 400
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    analysis = _build_analysis_response(filename, saved_path, duration)
+    try:
+        analysis = _build_analysis_response(filename, saved_path, duration)
+    except (GazeShiftModelUnavailable, GazeShiftModelContractError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 503
 
     return jsonify({
         "ok": True,

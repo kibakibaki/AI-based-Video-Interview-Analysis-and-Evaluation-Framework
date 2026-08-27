@@ -130,10 +130,13 @@ form.addEventListener("submit", async (event) => {
       return;
     }
 
+    const gazeSummary = analyseResult.analysis.gaze_shift_report.summary;
     setStatus("success", "Processing completed.", {
       "Processing time": getProcessingElapsedLabel(),
       "Video duration": analyseResult.analysis.duration_label,
-      "Confidence level": analyseResult.analysis.confidence_report.label,
+      "Gaze-shift windows": `${gazeSummary.gaze_shift_windows}/${gazeSummary.classified_windows}`,
+      "Uncertain windows": gazeSummary.uncertain_windows,
+      "Unobservable windows": gazeSummary.unobservable_windows,
     });
     window.alert("Processing completed.");
   } catch (error) {

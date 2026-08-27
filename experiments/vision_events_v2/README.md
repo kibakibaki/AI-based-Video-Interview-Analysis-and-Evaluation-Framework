@@ -1,7 +1,7 @@
 # Vision Events V2 Pilot
 
-This isolated experiment tests a new training path without changing the existing
-application. It reads frames directly from `sample_vid/`, converts each labelled
+This experiment trains the binary model used by the upload application. It reads
+frames directly from `sample_vid/`, converts each labelled
 3-second window into a 10 Hz facial-feature sequence, and trains a small temporal
 CNN with video-level train/validation/test separation.
 
@@ -21,8 +21,10 @@ truth for the final evaluation.
 - Videos: `sample_vid/*.mp4` and `sample_vid/*.mov`
 - Existing pilot labels: `data/labels/manual_window_labels.csv`
 - Sequence dataset: `experiments/vision_events_v2/artifacts/look_away_sequences.npz`
-- Model: `experiments/vision_events_v2/artifacts/temporal_cnn.pt`
-- Metrics: `experiments/vision_events_v2/artifacts/metrics.json`
+- RF model used by the app: `experiments/vision_events_v2/artifacts/summary_random_forest.joblib`
+- Baseline metrics: `experiments/vision_events_v2/artifacts/baseline_metrics.json`
+- CNN model: `experiments/vision_events_v2/artifacts/temporal_cnn.pt`
+- CNN metrics: `experiments/vision_events_v2/artifacts/metrics.json`
 
 Generated artifacts are ignored by Git.
 
@@ -50,14 +52,15 @@ python experiments/vision_events_v2/extract_sequences.py --max-windows 80
 python experiments/vision_events_v2/train_temporal_cnn.py --epochs 30 --patience 8
 ```
 
-Use `--target level` during extraction to keep the original three-class target:
+The V2 task is frozen as binary: level 0 becomes `no_gaze_shift`, while levels 1
+and 2 become `gaze_shift`. Original levels remain in the generated dataset only
+for provenance; V2 no longer exposes a three-class training option.
 
-```bash
-python experiments/vision_events_v2/extract_sequences.py --target level
-```
-
-The binary target is the recommended first diagnostic because the current
-automatic features and labels do not reliably separate look-away levels 1 and 2.
+The RF artifact stores a probability threshold selected using validation data.
+At inference time, insufficient face/eye/head-pose observability returns
+`unobservable`; otherwise a probability below the stored threshold returns
+`uncertain`. Only sufficiently observable, sufficiently certain windows return
+one of the two binary states.
 
 ## Frame-level features
 

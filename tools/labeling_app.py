@@ -49,6 +49,11 @@ DEFAULT_WINDOW_SIZE = 3.0
 DEFAULT_STEP_SIZE = 3.0
 VALID_LABEL_VALUES = {"Y", "N"}
 LABELLED_VALUE = "Y"
+ANNOTATION_QUALITIES = ("clear", "uncertain", "unobservable")
+LEGACY_QUALITY_ALIASES = {
+    "unclear": "uncertain",
+    "invalid": "unobservable",
+}
 LOOK_AWAY_LEVEL_OPTIONS = [
     ("0", "0 — No clear look-away"),
     ("1", "1 — One brief look-away (about 0.3–1.5s)"),
@@ -108,13 +113,17 @@ def label_filename_for(source_filename: str) -> str:
     return f"{Path(source_filename).stem}.mp4"
 
 
+def normalise_annotation_quality(value: str) -> str:
+    return LEGACY_QUALITY_ALIASES.get(value, value)
+
+
 def has_valid_scores(row: dict[str, str]) -> bool:
     level = row.get(sheets.LOOK_AWAY_LEVEL_COLUMN, "")
-    quality = row.get("annotation_quality", "")
+    quality = normalise_annotation_quality(row.get("annotation_quality", ""))
     return (
         level in sheets.TRAINABLE_LOOK_AWAY_LEVEL_VALUES and quality == "clear"
     ) or (
-        level in {"", "U"} and quality in {"unclear", "invalid"}
+        level in {"", "U"} and quality in {"uncertain", "unobservable"}
     )
 
 
@@ -431,7 +440,7 @@ class WindowLabeler:
         ttk.Combobox(
             form,
             textvariable=self.quality_var,
-            values=("clear", "unclear", "invalid"),
+            values=ANNOTATION_QUALITIES,
             state="readonly",
         ).grid(row=1, column=1, sticky="ew", pady=(0, 12))
 
@@ -447,7 +456,8 @@ class WindowLabeler:
                 "Ignore movements shorter than about 0.3s. Use 0 for no clear look-away; "
                 "1 for one brief look-away lasting about 0.3–1.5s; 2 when look-away lasts "
                 "more than 1.5s in total or occurs at least twice. For clips that cannot "
-                "be judged, choose quality unclear or invalid without selecting a level."
+                "be judged, choose uncertain; choose unobservable when the face or eyes "
+                "cannot be measured. Do not select a level for either outcome."
             ),
             wraplength=360,
             foreground="#56657a",
@@ -512,7 +522,9 @@ class WindowLabeler:
         self.look_away_level_var.set(
             row.get(sheets.LOOK_AWAY_LEVEL_COLUMN, "")
         )
-        self.quality_var.set(row.get("annotation_quality") or "clear")
+        self.quality_var.set(
+            normalise_annotation_quality(row.get("annotation_quality") or "clear")
+        )
 
         assert self.notes_text is not None
         self.notes_text.delete("1.0", tk.END)

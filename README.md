@@ -1,6 +1,6 @@
 # AI-based Video Interview Analysis and Evaluation Framework
 
-This project is a prototype for video interview upload, gaze analysis, and eye-contact confidence scoring. The backend uses Flask, OpenCV, MediaPipe, GazeTracking, dlib, and NumPy.
+This project is a prototype for video interview upload and observable gaze-shift analysis. It does not infer a candidate's confidence, engagement, honesty, or competence from gaze.
 
 ## Environment Setup
 
@@ -72,7 +72,17 @@ python -m pip install --force-reinstall --no-deps -r backend/requirements-gaze.t
 
 ## Run The Upload Website
 
-With the virtual environment activated:
+First generate the frozen binary RF artifact and its validation-derived rejection
+threshold:
+
+```bash
+source backend/venv311/bin/activate
+python -m pip install -r backend/requirements-training.txt
+python experiments/vision_events_v2/extract_sequences.py
+python experiments/vision_events_v2/train_baselines.py
+```
+
+Then, with the virtual environment activated:
 
 ```bash
 python backend/app.py
@@ -90,7 +100,9 @@ Then open:
 http://127.0.0.1:5001
 ```
 
-Upload an MP4 or MOV video. The backend validates the video, runs gaze analysis, and returns the confidence report.
+Upload an MP4 or MOV video. Each three-second window returns exactly one of
+`no_gaze_shift`, `gaze_shift`, `uncertain`, or `unobservable`. The latter two are
+quality/rejection outcomes, not learned behaviour classes.
 
 ## Run The Desktop Labelling Tool
 
@@ -155,8 +167,8 @@ Look-away is labelled as an ordinal level:
 - `2` — more than 1.5 seconds of look-away in total, or at least two clear look-away events
 
 Ignore movements shorter than about 0.3 seconds. Use quality `clear` with levels
-0–2. If the clip cannot be judged, do not select a level: use `unclear` when it
-can be reviewed later or `invalid` when it is unusable. Such rows are recorded as
+0–2. If visible evidence is ambiguous, do not select a level and use `uncertain`.
+If the face or eyes cannot be measured, use `unobservable`. Such rows are recorded as
 reviewed but excluded from training. Other behaviour columns are preserved in the
 CSV, but this look-away labelling pass does not edit or require them. Each future
 behaviour should use a separate focused Y/N labelling task and its own quality
@@ -245,22 +257,26 @@ python -m pip install -r backend/requirements-training.txt
 jupyter notebook model_training/look_away_training.ipynb
 ```
 
-The notebook predicts `look_away_level` as three separate classes: level 0,
-level 1, and level 2. Non-clear rows and legacy `U` rows are not used for training.
+The notebook is a legacy three-class experiment and is not the authoritative V2
+task. The deployed V2 path is frozen to `no_gaze_shift` versus `gaze_shift`.
 
 ## Switch Camera Or Video Analysis
 
-For local testing without the upload page, edit these variables in `backend/app.py`:
+For local testing without the upload page, choose `ANALYSIS_SOURCE` in
+`backend/app.py`, then start with `APP_MODE=analysis`:
 
 ```python
-APP_MODE = "analysis"
 ANALYSIS_SOURCE = "camera"
+```
+
+```bash
+APP_MODE=analysis ./run_app.sh
 ```
 
 Valid values:
 
-- `APP_MODE = "server"` starts the upload website.
-- `APP_MODE = "analysis"` runs local gaze analysis directly.
+- `APP_MODE=server` starts the upload website (the default).
+- `APP_MODE=analysis` runs local gaze analysis directly.
 - `ANALYSIS_SOURCE = "camera"` analyses the webcam.
 - `ANALYSIS_SOURCE = "video"` analyses `LOCAL_VIDEO_PATH`.
 
@@ -274,11 +290,13 @@ backend/
   requirements.txt        Python dependencies
   Vision/
     face_analysis/
-      analysis_utils.py       Unified camera/video analysis flow and scoring loop
+      analysis_utils.py       Unified camera/video observable-feature loop
+      gaze_shift_classifier.py Binary RF inference and rejection policy
+      gaze_shift_features.py  Shared V2 frame-level model features
       gaze_utils.py           GazeTracking adapter for pupil/eye gaze detection
       head_pose_utils.py      Head pose estimation and head-facing-camera checks
       visual_features.py      ML-ready visual feature aggregation
-      confidence_scoring.py   Eye-contact confidence scoring
+      confidence_scoring.py   Legacy scorer; not used by the upload workflow
       video_utils.py          Frame extraction and basic face detection helpers
 frontend/
   index.html              Upload page
@@ -306,10 +324,10 @@ tools/
 
 ## Visual Features
 
-The backend returns ML-ready visual features under:
+The backend returns diagnostic visual features under:
 
 ```text
-analysis.confidence_report.features
+analysis.visual_features
 ```
 
 Current visual features include:
@@ -336,8 +354,9 @@ data/app_output/analysis/<upload-uuid>.csv
 data/app_output/analysis/<upload-uuid>_windows.csv
 ```
 
-The first file contains one summary row for the whole video. The `_windows.csv`
-file contains sliding-window visual features without cutting the original video.
+The first file contains gaze-state counts for the whole video. The `_windows.csv`
+file contains observable diagnostic features, RF probabilities, and one of the
+four gaze states for each window without cutting the original video.
 Uploaded videos are stored separately under `data/app_output/uploads/`. The main
 app never writes to `data/output/`, which is reserved for training feature files.
 Both workflows use 3 second windows with a 3 second step.

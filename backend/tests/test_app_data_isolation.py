@@ -56,12 +56,36 @@ class AppDataIsolationTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_upload_and_analysis_use_uuid_and_app_output_only(self):
-        confidence_report = {
-            "overall_score": 0.75,
-            "label": "Moderate",
+        visual_report = {
             "features": {"eye_contact_ratio": 0.6},
             "window_features": [
                 {"window_start": 0.0, "window_end": 3.0, "eye_contact_ratio": 0.6}
+            ],
+        }
+        gaze_shift_report = {
+            "task": "binary_gaze_shift",
+            "model": "test-model.joblib",
+            "summary": {
+                "total_windows": 1,
+                "observable_windows": 1,
+                "classified_windows": 1,
+                "no_gaze_shift_windows": 0,
+                "gaze_shift_windows": 1,
+                "uncertain_windows": 0,
+                "unobservable_windows": 0,
+                "gaze_shift_ratio": 1.0,
+            },
+            "windows": [
+                {
+                    "window_start": 0.0,
+                    "window_end": 3.0,
+                    "state": "gaze_shift",
+                    "reason": None,
+                    "face_visibility_ratio": 1.0,
+                    "visual_observability_ratio": 1.0,
+                    "prediction_probability": 0.8,
+                    "probabilities": {"no_gaze_shift": 0.2, "gaze_shift": 0.8},
+                }
             ],
         }
 
@@ -87,15 +111,25 @@ class AppDataIsolationTests(unittest.TestCase):
             with patch.object(
                 app_module,
                 "analyse_gaze",
-                return_value=([(0.25, 0.75)], 0.5, confidence_report),
+                return_value=([(0.25, 0.75)], 0.5, visual_report),
             ):
-                analysis_response = self.client.post(
-                    "/analyse",
-                    json={"filename": filename},
-                )
+                with patch.object(
+                    app_module,
+                    "classify_gaze_shift_video",
+                    return_value=gaze_shift_report,
+                ):
+                    analysis_response = self.client.post(
+                        "/analyse",
+                        json={"filename": filename},
+                    )
 
         self.assertEqual(analysis_response.status_code, 200)
         analysis_json = analysis_response.get_json()["analysis"]
+        self.assertNotIn("confidence_report", analysis_json)
+        self.assertEqual(
+            analysis_json["gaze_shift_report"]["windows"][0]["state"],
+            "gaze_shift",
+        )
         stem = Path(filename).stem
         self.assertEqual(
             analysis_json["csv_path"],

@@ -199,7 +199,7 @@ def analyse_gaze(
     use_eye_gaze=True,
     analysis_frame_stride=1,
     show_preview=None,
-    enable_confidence_scoring=True
+    enable_confidence_scoring=False
 ):
     """
     Analyse whether the person is roughly looking at their primary attention point from a video
@@ -220,7 +220,7 @@ def analyse_gaze(
     Returns:
         segments: list of (start_time, end_time)
         looking_total_time: total time in seconds
-        confidence_report: scoring dictionary or None
+        analysis_report: observable visual features and optional legacy score
     """
     if source_type not in {"video", "camera"}:
         raise ValueError('source_type must be either "video" or "camera"')
@@ -497,11 +497,13 @@ def analyse_gaze(
     print(f"\nTotal primary-attention time: {looking_total_time:.2f} seconds")
     print(f"Video total duration: {total_duration:.2f} seconds")
 
-    confidence_report = None
+    analysis_report = {
+        "features": visual_features,
+        "window_features": window_features,
+    }
     if confidence_scorer is not None:
-        confidence_report = confidence_scorer.report()
-        confidence_report["features"] = visual_features
-        confidence_report["window_features"] = window_features
-        print_confidence_report(confidence_report)
+        legacy_confidence_report = confidence_scorer.report()
+        analysis_report["legacy_confidence_report"] = legacy_confidence_report
+        print_confidence_report(legacy_confidence_report)
 
-    return segments, looking_total_time, confidence_report
+    return segments, looking_total_time, analysis_report
