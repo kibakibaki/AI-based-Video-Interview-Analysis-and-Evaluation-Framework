@@ -1,6 +1,7 @@
 import csv
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import cv2
 from flask import Flask, jsonify, request, send_from_directory
@@ -12,8 +13,9 @@ from Vision import analyse_gaze
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
 FRONTEND_DIR = PROJECT_DIR / "frontend"
-UPLOAD_DIR = PROJECT_DIR / "data" / "video_sample"
-OUTPUT_DIR = PROJECT_DIR / "data" / "output"
+APP_DATA_DIR = PROJECT_DIR / "data" / "app_output"
+UPLOAD_DIR = APP_DATA_DIR / "uploads"
+OUTPUT_DIR = APP_DATA_DIR / "analysis"
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov"}
 MAX_DURATION_SECONDS = 5 * 60
@@ -25,7 +27,7 @@ APP_MODE = "analysis"
 # Valid values: "camera", "single_camera", or "video".
 ANALYSIS_SOURCE = "camera"
 
-LOCAL_VIDEO_PATH = UPLOAD_DIR / "sample1.mp4"
+LOCAL_VIDEO_PATH = PROJECT_DIR / "data" / "video_sample" / "sample1.mp4"
 
 # OpenCV camera indexes on macOS depend on the connected devices. Override with:
 # CAMERA_INDEX=2 ./run_app.sh
@@ -67,17 +69,12 @@ def _serialise_segments(segments):
     ]
 
 
-def _next_sample_filename(extension):
-    existing_numbers = []
-    for path in UPLOAD_DIR.iterdir():
-        if path.suffix.lower() not in ALLOWED_EXTENSIONS:
-            continue
-        stem = path.stem
-        if stem.startswith("sample") and stem[6:].isdigit():
-            existing_numbers.append(int(stem[6:]))
-
-    next_number = max(existing_numbers, default=0) + 1
-    return f"sample{next_number}{extension}"
+def _new_upload_filename(extension):
+    """Return a UUID filename that cannot collide with an existing upload."""
+    while True:
+        filename = f"{uuid4()}{extension}"
+        if not (UPLOAD_DIR / filename).exists():
+            return filename
 
 
 def _write_analysis_csv(filename, duration, analysis):
@@ -249,7 +246,7 @@ def upload_video():
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    filename = _next_sample_filename(extension)
+    filename = _new_upload_filename(extension)
     saved_path = UPLOAD_DIR / filename
     video_file.save(saved_path)
 

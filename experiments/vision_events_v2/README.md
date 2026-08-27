@@ -71,6 +71,10 @@ Each sampled frame produces the following observable measurements:
 - iris horizontal and vertical position;
 - head pitch, yaw, and roll.
 
+Head pitch is stored as a signed offset from the nearest front-facing Euler
+representation. This prevents the equivalent +180/-180 representations produced
+by `solvePnP` from becoming artificial jumps in sequence statistics.
+
 Missing frames are retained and imputed from the training split only. The test
 videos remain untouched until final evaluation.
 

@@ -28,7 +28,22 @@ def angle_distance_from_front(angle):
     Return the smallest distance from a front-facing angle.
     solvePnP can represent a front-facing head as either 0 or +/-180 degrees.
     """
-    return min(abs(angle), abs(abs(angle) - 180))
+    return abs(signed_angle_from_front(angle))
+
+
+def signed_angle_from_front(angle):
+    """Return the signed offset from the nearest front-facing representation.
+
+    ``solvePnP`` Euler pitch can place a front-facing head near either 0 degrees
+    or +/-180 degrees. Mapping to the nearest representation keeps the signed
+    offset continuous when the raw angle wraps from +180 to -180; for example,
+    179, 180, -179 becomes -1, 0, 1.
+    """
+    if abs(angle) <= abs(abs(angle) - 180):
+        return angle
+    if angle >= 0:
+        return angle - 180
+    return angle + 180
 
 
 def is_head_facing_camera(pitch, yaw, yaw_threshold, pitch_threshold):

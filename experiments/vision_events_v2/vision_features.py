@@ -14,7 +14,10 @@ BACKEND_DIR = PROJECT_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from Vision.face_analysis.head_pose_utils import estimate_head_pose  # noqa: E402
+from Vision.face_analysis.head_pose_utils import (  # noqa: E402
+    estimate_head_pose,
+    signed_angle_from_front,
+)
 
 
 FEATURE_NAMES = (
@@ -123,6 +126,7 @@ def extract_frame_features(frame: np.ndarray, face_mesh) -> np.ndarray:
 
     pose = estimate_head_pose(frame, landmarks)
     pitch, yaw, roll = (pose[:3] if pose is not None else (np.nan, np.nan, np.nan))
+    pitch = signed_angle_from_front(pitch)
 
     return np.array(
         [
@@ -148,4 +152,3 @@ def extract_frame_features(frame: np.ndarray, face_mesh) -> np.ndarray:
         ],
         dtype=np.float32,
     )
-

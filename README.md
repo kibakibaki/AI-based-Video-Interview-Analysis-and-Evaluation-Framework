@@ -285,8 +285,11 @@ frontend/
   script.js               Upload request and result display
   style.css               Page styling
 data/
-  video_sample/           Uploaded videos from the main app
-  output/                 Summary CSV and sliding-window CSV analysis results
+  app_output/             Runtime-only app uploads and analysis results
+    uploads/              UUID-named videos uploaded through the main app
+    analysis/             App summary and sliding-window CSV results
+  video_sample/           Optional sample video for local non-upload analysis
+  output/                 Training feature CSVs (never written by the main app)
   labels/                 Manual labels for model training
   window_clips/           Legacy/generated clips, not required by the current labelling tool
 sample_vid/               Source videos for the standalone labelling tool
@@ -329,10 +332,12 @@ Current visual features include:
 For each uploaded video, the backend writes two CSV files:
 
 ```text
-data/output/sample1.csv
-data/output/sample1_windows.csv
+data/app_output/analysis/<upload-uuid>.csv
+data/app_output/analysis/<upload-uuid>_windows.csv
 ```
 
-`sample1.csv` contains one summary row for the whole video. `sample1_windows.csv`
-contains sliding-window visual features without cutting the original video file.
-The main analysis output and standalone manual labelling tool both use 3 second windows with a 3 second step so training features and labels align.
+The first file contains one summary row for the whole video. The `_windows.csv`
+file contains sliding-window visual features without cutting the original video.
+Uploaded videos are stored separately under `data/app_output/uploads/`. The main
+app never writes to `data/output/`, which is reserved for training feature files.
+Both workflows use 3 second windows with a 3 second step.
