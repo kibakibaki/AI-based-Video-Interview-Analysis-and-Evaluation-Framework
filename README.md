@@ -142,7 +142,7 @@ By default, the tool uses 3 second windows with a 3 second step, so windows do n
 ./run_labeling_app.sh --filename sample1.mp4 --window-size 6 --step-size 6
 ```
 
-The tool opens a desktop window, plays each window directly from the source video in `sample_vid/`, and writes checkbox-based Y/N observation labels to:
+The tool opens a desktop window, plays each window directly from the source video in `sample_vid/`, and records one look-away level plus annotation quality to:
 
 ```text
 data/labels/manual_window_labels.csv
@@ -150,15 +150,22 @@ data/labels/manual_window_labels.csv
 
 Look-away is labelled as an ordinal level:
 
-- `0` — no looking away
-- `1` — looking away
-- `2` — frequently looking away
-- `U` — unusable or impossible to judge
+- `0` — no clear look-away
+- `1` — one clear look-away lasting about 0.3–1.5 seconds
+- `2` — more than 1.5 seconds of look-away in total, or at least two clear look-away events
+
+Ignore movements shorter than about 0.3 seconds. Use quality `clear` with levels
+0–2. If the clip cannot be judged, do not select a level: use `unclear` when it
+can be reviewed later or `invalid` when it is unusable. Such rows are recorded as
+reviewed but excluded from training. Other behaviour columns are preserved in the
+CSV, but this look-away labelling pass does not edit or require them. Each future
+behaviour should use a separate focused Y/N labelling task and its own quality
+field so that "not visible" is not accidentally recorded as a negative label.
 
 The old window-level `looking_away` and `frequent_looking_away` columns are
 preserved for compatibility but are no longer edited by the labelling tool.
-Frequency should be calculated later across several consecutive windows rather
-than judged inside one 3 second window.
+Overall frequency should be calculated later across several consecutive windows;
+level 2 only describes sustained or repeated evidence inside the current window.
 
 Existing labels are migrated with `looking_away=Y -> 1`,
 `frequent_looking_away=Y -> 2`, and both fields set to N -> 0.
@@ -224,9 +231,11 @@ data/training/window_training_dataset.csv
 The merge uses `filename`, `window_start`, and `window_end` as the join key.
 Automatic feature columns become model input `X`. For binary look-away
 training, level `0` becomes `looking_away=0`, levels `1` and `2` become
-`looking_away=1`, and level `U` is excluded. The generated
+`looking_away=1`; non-clear rows and legacy level `U` rows are excluded. The generated
 `frequent_looking_away` target is 1 only for level `2`. Other manual checkbox
-labels are converted from Y/N to 1/0.
+labels are converted from Y/N to 1/0 when present. By default, training rows
+must have look-away level 0, 1, or 2 and annotation quality `clear`; unrelated
+behaviour labels are not required.
 
 To run the model-training notebook, install the separate training dependencies:
 
@@ -237,7 +246,7 @@ jupyter notebook model_training/look_away_training.ipynb
 ```
 
 The notebook predicts `look_away_level` as three separate classes: level 0,
-level 1, and level 2. Rows labelled `U` are not used for training.
+level 1, and level 2. Non-clear rows and legacy `U` rows are not used for training.
 
 ## Switch Camera Or Video Analysis
 

@@ -50,10 +50,9 @@ DEFAULT_STEP_SIZE = 3.0
 VALID_LABEL_VALUES = {"Y", "N"}
 LABELLED_VALUE = "Y"
 LOOK_AWAY_LEVEL_OPTIONS = [
-    ("0", "0 — No looking away"),
-    ("1", "1 — Looking away"),
-    ("2", "2 — Frequently looking away"),
-    ("U", "U — Unusable / cannot judge"),
+    ("0", "0 — No clear look-away"),
+    ("1", "1 — One brief look-away (about 0.3–1.5s)"),
+    ("2", "2 — Sustained (>1.5s total) or repeated (≥2 times)"),
 ]
 
 
@@ -110,9 +109,12 @@ def label_filename_for(source_filename: str) -> str:
 
 
 def has_valid_scores(row: dict[str, str]) -> bool:
+    level = row.get(sheets.LOOK_AWAY_LEVEL_COLUMN, "")
+    quality = row.get("annotation_quality", "")
     return (
-        row.get(sheets.LOOK_AWAY_LEVEL_COLUMN, "") in sheets.LOOK_AWAY_LEVEL_VALUES
-        and all(row.get(field["name"], "") in VALID_LABEL_VALUES for field in sheets.LABEL_FIELDS)
+        level in sheets.TRAINABLE_LOOK_AWAY_LEVEL_VALUES and quality == "clear"
+    ) or (
+        level in {"", "U"} and quality in {"unclear", "invalid"}
     )
 
 
@@ -333,9 +335,7 @@ class WindowLabeler:
         self.after_id: str | None = None
         self.frame_image = None
 
-        self.label_vars = {field["name"]: tk.BooleanVar(value=False) for field in sheets.LABEL_FIELDS}
         self.look_away_level_var = tk.StringVar(value="")
-        self.labeled_var = tk.BooleanVar(value=True)
         self.quality_var = tk.StringVar(value="clear")
         self.notes_text: tk.Text | None = None
 
@@ -356,11 +356,11 @@ class WindowLabeler:
             self.rows = self.rows[:self.sample_limit]
         self.index = 0
         scope = self.filename if len(self.filenames) == 1 else f"{len(self.filenames)} videos"
-        self.root.title(f"Window Labeling - Random from {scope}")
+        self.root.title(f"Look-away Labeling - Random from {scope}")
 
     def build_ui(self) -> None:
-        self.root.title(f"Window Labeling - {self.filename}")
-        self.root.geometry("1180x760")
+        self.root.title(f"Look-away Labeling - {self.filename}")
+        self.root.geometry("1180x640")
         self.root.minsize(980, 640)
 
         outer = ttk.Frame(self.root, padding=16)
@@ -371,7 +371,7 @@ class WindowLabeler:
         outer.columnconfigure(1, weight=2)
         outer.rowconfigure(1, weight=1)
 
-        title = ttk.Label(outer, text="Sliding Window Labeling", font=("Arial", 20, "bold"))
+        title = ttk.Label(outer, text="Look-away Window Labeling", font=("Arial", 20, "bold"))
         title.grid(row=0, column=0, sticky="w", pady=(0, 12))
 
         self.progress_label = ttk.Label(outer, text="")
@@ -419,11 +419,12 @@ class WindowLabeler:
         form.grid(row=1, column=1, sticky="nsew")
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text="Label").grid(row=0, column=0, sticky="w", pady=(0, 12))
-        ttk.Checkbutton(
+        ttk.Label(form, text="Task").grid(row=0, column=0, sticky="w", pady=(0, 12))
+        ttk.Label(
             form,
-            text="Reviewed",
-            variable=self.labeled_var,
+            text="Judge look-away only; do not label other behaviours in this pass.",
+            wraplength=360,
+            foreground="#56657a",
         ).grid(row=0, column=1, sticky="w", pady=(0, 12))
 
         ttk.Label(form, text="Quality").grid(row=1, column=0, sticky="w", pady=(0, 12))
@@ -443,8 +444,10 @@ class WindowLabeler:
         ttk.Label(
             level_frame,
             text=(
-                "Use 0 for no looking away, 1 for looking away, "
-                "2 for frequently looking away, and U when the clip cannot be judged."
+                "Ignore movements shorter than about 0.3s. Use 0 for no clear look-away; "
+                "1 for one brief look-away lasting about 0.3–1.5s; 2 when look-away lasts "
+                "more than 1.5s in total or occurs at least twice. For clips that cannot "
+                "be judged, choose quality unclear or invalid without selecting a level."
             ),
             wraplength=360,
             foreground="#56657a",
@@ -457,25 +460,6 @@ class WindowLabeler:
                 variable=self.look_away_level_var,
             ).grid(row=option_index, column=0, sticky="w", pady=(2, 0))
         row_index += 1
-
-        for field in sheets.LABEL_FIELDS:
-            ttk.Label(form, text=field["label"]).grid(row=row_index, column=0, sticky="nw", pady=4)
-
-            field_frame = ttk.Frame(form)
-            field_frame.grid(row=row_index, column=1, sticky="ew", pady=4)
-            field_frame.columnconfigure(0, weight=1)
-
-            ttk.Label(
-                field_frame,
-                text=field["hint"],
-                wraplength=360,
-                foreground="#56657a",
-            ).grid(row=0, column=0, sticky="w")
-            ttk.Checkbutton(
-                field_frame,
-                variable=self.label_vars[field["name"]],
-            ).grid(row=0, column=1, sticky="e", padx=(8, 0))
-            row_index += 1
 
         ttk.Label(form, text="Notes").grid(row=row_index, column=0, sticky="nw", pady=(12, 4))
         self.notes_text = tk.Text(form, height=4, wrap="word")
@@ -525,12 +509,9 @@ class WindowLabeler:
         )
         self.time_label.config(text=f"{row['window_start']}s - {row['window_end']}s")
 
-        for field in sheets.LABEL_FIELDS:
-            self.label_vars[field["name"]].set(row.get(field["name"], "") == "Y")
         self.look_away_level_var.set(
             row.get(sheets.LOOK_AWAY_LEVEL_COLUMN, "")
         )
-        self.labeled_var.set(True)
         self.quality_var.set(row.get("annotation_quality") or "clear")
 
         assert self.notes_text is not None
@@ -538,7 +519,7 @@ class WindowLabeler:
         self.notes_text.insert("1.0", row.get("notes", ""))
 
         self.status_label.config(
-            text="Choose look-away level, tick other behaviours, then press Enter."
+            text="Choose quality and look-away level, then press Enter."
         )
         self.replay()
 
@@ -649,13 +630,14 @@ class WindowLabeler:
             return
 
         level = self.look_away_level_var.get()
-        if level not in sheets.LOOK_AWAY_LEVEL_VALUES:
-            self.status_label.config(text="Choose look-away level 0, 1, 2, or U before saving.")
-            return
-
-        labels = {}
-        for field in sheets.LABEL_FIELDS:
-            labels[field["name"]] = "Y" if self.label_vars[field["name"]].get() else "N"
+        quality = self.quality_var.get()
+        if quality == "clear":
+            if level not in sheets.TRAINABLE_LOOK_AWAY_LEVEL_VALUES:
+                self.status_label.config(text="Choose look-away level 0, 1, or 2 before saving.")
+                return
+            saved_level = level
+        else:
+            saved_level = ""
 
         row = self.rows[self.index]
         target_key = row_key(row)
@@ -665,12 +647,9 @@ class WindowLabeler:
             if row_key(all_row) != target_key:
                 continue
 
-            for field_name, value in labels.items():
-                all_row[field_name] = value
-                row[field_name] = value
-            all_row[sheets.LOOK_AWAY_LEVEL_COLUMN] = level
-            row[sheets.LOOK_AWAY_LEVEL_COLUMN] = level
-            all_row["is_labeled"] = LABELLED_VALUE if self.labeled_var.get() else ""
+            all_row[sheets.LOOK_AWAY_LEVEL_COLUMN] = saved_level
+            row[sheets.LOOK_AWAY_LEVEL_COLUMN] = saved_level
+            all_row["is_labeled"] = LABELLED_VALUE
             all_row["annotation_quality"] = self.quality_var.get()
             all_row["notes"] = notes
             row["is_labeled"] = all_row["is_labeled"]
@@ -779,7 +758,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Review only windows that have an old Y/N looking_away label and "
-            "replace migrated legacy labels with an explicit 0/1/2/U level."
+            "replace migrated legacy labels with an explicit 0/1/2 level or non-clear quality."
         ),
     )
     return parser.parse_args()
