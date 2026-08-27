@@ -1,0 +1,11 @@
+{
+    "duckdb.databases": [
+        {
+            "alias": "energy_analytics",
+            "type": "file",
+            "path": "/Users/kiba/unsyn_doc/2026_intern/repo/Voyage-Data-Science-S2/database/energy_analytics.duckdb",
+            "attached": false
+        }
+    ],
+    "duckdb.defaultDatabase": "energy_analytics"
+}
