@@ -13,6 +13,7 @@ from .head_pose_utils import (
     draw_head_direction,
     estimate_head_pose,
     is_head_facing_camera,
+    signed_angle_from_front,
 )
 from .visual_features import VisualFeatureTracker
 
@@ -168,7 +169,7 @@ def _combined_horizontal_attention_offset(yaw, yaw_threshold, gaze_horizontal_ra
 
 
 def _combined_vertical_attention_offset(pitch, pitch_threshold, gaze_vertical_ratio):
-    head_offset = _safe_normalized(_signed_front_angle(pitch), pitch_threshold)
+    head_offset = _safe_normalized(signed_angle_from_front(pitch), pitch_threshold)
     gaze_offset = _gaze_ratio_offset(gaze_vertical_ratio)
     if gaze_offset is None:
         return head_offset
@@ -185,14 +186,6 @@ def _safe_normalized(value, threshold):
     if threshold <= 0:
         return value
     return value / threshold
-
-
-def _signed_front_angle(angle):
-    if abs(angle) <= abs(abs(angle) - 180):
-        return angle
-    if angle >= 0:
-        return angle - 180
-    return angle + 180
 
 
 def analyse_gaze(

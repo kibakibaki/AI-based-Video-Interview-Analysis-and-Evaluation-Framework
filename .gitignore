@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 
 data/video_sample/
+data/app_output/
 sample_vid/
 data/window_clips/
 data/frames/
